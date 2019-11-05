@@ -17,6 +17,7 @@ hex = "0.4.0"
 chrono = "0.4.9"
 sha2 = "0.8.0"
 hmac = "0.7.1"
+generic-array = "0.13.2"
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"

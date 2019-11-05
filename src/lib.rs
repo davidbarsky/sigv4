@@ -155,14 +155,15 @@ fn read_request() -> Result<(), Error> {
 
     // Step 3: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-calculate-signature.html
     let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-    let signed = sign_string(&string_to_sign, secret, date.date(), "us-east-1", "iam");
-    dbg!(signed);
 
-    // let key = Key::new(ringhmac::HMAC_SHA256, secret.as_bytes());
-    // let signing_key = generate_signing_key_2(key, date.date(), "us-east-1", "iam");
-    // let signature = calculate_signature(signing_key, signed);
+    let signing_key = generate_signing_key_2(secret, date.date(), "us-east-1", "iam");
+    let signing_key_2 = generate_signing_key_3(secret, date.date(), "us-east-1", "iam");
 
-    // dbg!(signature);
+    let signature = calculate_signature(signing_key, &string_to_sign.as_bytes());
+    let signature_2 = calculate_signature_2(&signing_key_2, string_to_sign.as_bytes());
+
+    dbg!(signature);
+    dbg!(signature_2);
 
     Ok(())
 }
@@ -213,10 +214,11 @@ fn test_signature_calculation() -> Result<(), Error> {
     let creq = fs::read_to_string(format!("aws-sig-v4-test-suite/iam.creq"))?;
     let date = DateTime::parse_aws("20150830T123600Z")?;
 
-    let signed = sign_string(&creq, secret, date.date(), "us-east-1", "iam");
+    let derived_key = generate_signing_key_2(secret, date.date(), "us-east-1", "iam");
+    let actual = calculate_signature(derived_key, creq.as_bytes());
 
-    let expected = "5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7";
-    assert_eq!(expected, signed);
+    let expected_signature = "5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7";
+    assert_eq!(expected_signature, &actual);
 
     Ok(())
 }
@@ -277,9 +279,9 @@ fn encode_with_hex(s: String) -> String {
     hex::encode(digest)
 }
 
-fn calculate_signature(signing_key: Vec<u8>, string_to_sign: String) -> String {
+fn calculate_signature(signing_key: ringhmac::Tag, string_to_sign: &[u8]) -> String {
     let s_key = ringhmac::Key::new(ringhmac::HMAC_SHA256, signing_key.as_ref());
-    let tag = ringhmac::sign(&s_key, string_to_sign.as_bytes());
+    let tag = ringhmac::sign(&s_key, string_to_sign);
 
     hex::encode(tag)
 }
@@ -289,22 +291,14 @@ fn calculate_signature(signing_key: Vec<u8>, string_to_sign: String) -> String {
 // kRegion = HMAC(kDate, Region)
 // kService = HMAC(kRegion, Service)
 // kSigning = HMAC(kService, "aws4_request")
-fn generate_signing_key(secret: Key, date: Date<Utc>, region: &str, service: &str) -> Vec<u8> {
-    let mut ctx = ringhmac::Context::with_key(&secret);
-    ctx.update(date.fmt_aws().as_bytes());
-    ctx.update(region.as_bytes());
-    ctx.update(service.as_bytes());
-    ctx.update("aws4_request".as_bytes());
-    ctx.sign().as_ref().to_vec()
-}
-
-// kSecret = your secret access key
-// kDate = HMAC("AWS4" + kSecret, Date)
-// kRegion = HMAC(kDate, Region)
-// kService = HMAC(kRegion, Service)
-// kSigning = HMAC(kService, "aws4_request")
-fn generate_signing_key_2(secret: Key, date: Date<Utc>, region: &str, service: &str) -> Vec<u8> {
-    // sign date
+fn generate_signing_key_2(
+    secret: &str,
+    date: Date<Utc>,
+    region: &str,
+    service: &str,
+) -> ringhmac::Tag {
+    let secret = format!("AWS4{}", secret);
+    let secret = ringhmac::Key::new(ringhmac::HMAC_SHA256, &secret.as_bytes());
     let tag = ringhmac::sign(&secret, date.fmt_aws().as_bytes());
 
     // sign region
@@ -318,32 +312,33 @@ fn generate_signing_key_2(secret: Key, date: Date<Utc>, region: &str, service: &
     // sign request
     let key = ringhmac::Key::new(ringhmac::HMAC_SHA256, tag.as_ref());
     ringhmac::sign(&key, "aws4_request".as_bytes())
-        .as_ref()
-        .to_vec()
 }
 
-fn sign_string(
-    string_to_sign: &str,
+fn generate_signing_key_3<'a>(
     secret: &str,
     date: Date<Utc>,
     region: &str,
     service: &str,
-) -> String {
-    let date_str = date.fmt_aws();
-    let date_hmac = hmac(format!("AWS4{}", secret).as_bytes(), date_str.as_bytes())
-        .result()
-        .code();
-    let region_hmac = hmac(date_hmac.as_ref(), region.as_bytes()).result().code();
-    let service_hmac = hmac(region_hmac.as_ref(), service.as_bytes())
-        .result()
-        .code();
-    let signing_hmac = hmac(service_hmac.as_ref(), b"aws4_request").result().code();
-    hex::encode(
-        hmac(signing_hmac.as_ref(), string_to_sign.as_bytes())
-            .result()
-            .code()
-            .as_ref(),
-    )
+) -> Vec<u8> {
+    let secret = format!("AWS4{}", secret);
+    let secret = secret.as_bytes();
+    let date = date.fmt_aws();
+    let date = date.as_bytes();
+    let date = hmac(secret, date).result().code();
+
+    let region = region.as_bytes();
+    let region = hmac(&date, region).result().code();
+
+    let service = service.as_bytes();
+    let service = hmac(&region, service).result().code();
+
+    hmac(&service, b"aws4_request").result().code().to_vec()
+}
+
+// signature = HexEncode(HMAC(derived signing key, string to sign))
+fn calculate_signature_2(derived_key: &[u8], string_to_sign: &[u8]) -> String {
+    let hmac = hmac(derived_key, string_to_sign).result().code();
+    hex::encode(hmac)
 }
 
 fn parse_request(s: String) -> Result<Request<()>, Error> {
