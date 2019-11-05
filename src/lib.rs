@@ -1,21 +1,28 @@
 use bytes::Bytes;
-use chrono::prelude::*;
+use chrono::{format::ParseError, prelude::*};
 use eliza_error::Error;
+use hmac::{Hmac, Mac};
 use http::{
     header::HeaderName, uri::PathAndQuery, HeaderMap, HeaderValue, Method, Request, Uri, Version,
 };
-use ring::digest::{self, digest, Digest};
+use ring::{
+    digest::{self, digest, Digest as RingDigest},
+    hmac::{self as ringhmac, Key},
+};
 use serde_urlencoded as qs;
+use sha2::{Digest, Sha256};
 use std::{
     cmp::{Ordering, PartialOrd},
     collections::{BTreeMap, BTreeSet},
-    fmt, fs,
+    error::Error as _,
+    fmt, fs, str,
 };
 
 #[cfg(test)]
 use pretty_assertions::assert_eq;
 
 const HMAC_256: &'static str = "AWS4-HMAC-SHA256";
+const DATE_FORMAT: &'static str = "%Y%m%dT%H%M%SZ";
 
 #[derive(Default, Debug, PartialEq)]
 struct CanonicalRequest {
@@ -39,16 +46,16 @@ impl fmt::Display for CanonicalRequest {
             write!(f, "{}:", header.0.as_str())?;
             write!(f, "{}\n", value.to_str().unwrap())?;
         }
-        write!(f, "\n");
+        write!(f, "\n")?;
         // write out the signed headers
         let mut iter = self.signed_headers.iter().peekable();
         while let Some(next) = iter.next() {
             match iter.peek().is_some() {
-                true => write!(f, "{};", next.0.as_str()),
-                false => write!(f, "{}", next.0.as_str()),
-            }?;
+                true => write!(f, "{};", next.0.as_str())?,
+                false => write!(f, "{}", next.0.as_str())?,
+            };
         }
-        write!(f, "\n");
+        write!(f, "\n")?;
         write!(f, "{}", self.payload_hash)?;
         Ok(())
     }
@@ -69,6 +76,40 @@ impl Ord for CanonicalHeaderName {
     }
 }
 
+trait DateTimeExt {
+    // formats using SigV4's format. YYYYMMDD'T'HHMMSS'Z'.
+    fn fmt_aws(&self) -> String;
+    // YYYYMMDD
+    fn parse_aws(s: &str) -> Result<DateTime<Utc>, ParseError>;
+}
+
+trait DateExt {
+    fn fmt_aws(&self) -> String;
+
+    fn parse_aws(s: &str) -> Result<Date<Utc>, ParseError>;
+}
+
+impl DateExt for Date<Utc> {
+    fn fmt_aws(&self) -> String {
+        self.format("%Y%m%d").to_string()
+    }
+    fn parse_aws(s: &str) -> Result<Date<Utc>, ParseError> {
+        let date = NaiveDate::parse_from_str(s, "%Y%m%d")?;
+        Ok(Date::<Utc>::from_utc(date, Utc))
+    }
+}
+
+impl DateTimeExt for DateTime<Utc> {
+    fn fmt_aws(&self) -> String {
+        self.format(DATE_FORMAT).to_string()
+    }
+
+    fn parse_aws(s: &str) -> Result<DateTime<Utc>, ParseError> {
+        let date = NaiveDateTime::parse_from_str(s, DATE_FORMAT)?;
+        Ok(DateTime::<Utc>::from_utc(date, Utc))
+    }
+}
+
 #[test]
 fn read_request() -> Result<(), Error> {
     //file-name.req—the web request to be signed.
@@ -77,18 +118,19 @@ fn read_request() -> Result<(), Error> {
     //file-name.authz—the Authorization header.
     //file-name.sreq— the signed request.
 
+    // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let s = fs::read_to_string(
         "aws-sig-v4-test-suite/get-vanilla-query-order-key-case/get-vanilla-query-order-key-case.req",
     )?;
     let req = parse_request(s)?;
-    let mut canonical_request = CanonicalRequest::default();
-    canonical_request.method = req.method().clone();
-    canonical_request.path = req.uri().path_and_query().unwrap().path().to_string();
+    let mut creq = CanonicalRequest::default();
+    creq.method = req.method().clone();
+    creq.path = req.uri().path_and_query().unwrap().path().to_string();
 
     if let Some(pq) = req.uri().path_and_query() {
         if let Some(path) = pq.query() {
             let params: BTreeMap<String, String> = qs::from_str(path).unwrap();
-            canonical_request.params = qs::to_string(params)?;
+            creq.params = qs::to_string(params)?;
         }
     }
 
@@ -96,15 +138,31 @@ fn read_request() -> Result<(), Error> {
     for (name, _) in req.headers() {
         headers.insert(CanonicalHeaderName(name.clone()));
     }
-    canonical_request.signed_headers = headers;
-    canonical_request.headers = req.headers().clone();
-    let payload = sign_payload(String::new());
-    canonical_request.payload_hash = payload;
+    creq.signed_headers = headers;
+    creq.headers = req.headers().clone();
+    let payload = encode_with_hex(String::new());
+    creq.payload_hash = payload;
 
-    let actual = format!("{}", canonical_request);
+    let actual = format!("{}", creq);
     let expected = fs::read_to_string("aws-sig-v4-test-suite/get-vanilla-query-order-key-case/get-vanilla-query-order-key-case.creq")?;
     assert_eq!(actual, expected);
-    string_to_sign(Utc::now());
+
+    // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
+    let date = NaiveDateTime::parse_from_str("20150830T123600Z", DATE_FORMAT).unwrap();
+    let date = DateTime::<Utc>::from_utc(date, Utc);
+    let string_to_sign =
+        string_to_sign(date, "us-east-1", "iam", &encode_with_hex(creq.to_string()));
+
+    // Step 3: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-calculate-signature.html
+    let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+    let signed = sign_string(&string_to_sign, secret, date.date(), "us-east-1", "iam");
+    dbg!(signed);
+
+    // let key = Key::new(ringhmac::HMAC_SHA256, secret.as_bytes());
+    // let signing_key = generate_signing_key_2(key, date.date(), "us-east-1", "iam");
+    // let signature = calculate_signature(signing_key, signed);
+
+    // dbg!(signature);
 
     Ok(())
 }
@@ -112,25 +170,180 @@ fn read_request() -> Result<(), Error> {
 #[test]
 fn sign_payload_empty_string() {
     let expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-    let actual = sign_payload(String::new());
+    let actual = encode_with_hex(String::new());
     assert_eq!(expected, actual);
 }
 
-fn string_to_sign(date: DateTime<Utc>) -> String {
-    let date = date.format("YYYYMMDDHHMMSSZ");
-    let date = format!("{}", date);
-    dbg!(&date);
-    let credential_scope = String::new();
-    let hashed_canonical_request = String::new();
-    format!("{}\n{}\n{}\n", HMAC_256, date, credential_scope)
+#[test]
+fn datetime_format() -> Result<(), Error> {
+    let date = DateTime::parse_aws("20150830T123600Z")?;
+    let expected = "20150830T123600Z";
+    assert_eq!(expected, date.fmt_aws());
+
+    Ok(())
+}
+
+#[test]
+fn date_format() -> Result<(), Error> {
+    let date = Date::parse_aws("20150830")?;
+    let expected = "20150830";
+    assert_eq!(expected, date.fmt_aws());
+
+    Ok(())
+}
+
+#[test]
+fn test_string_to_sign() -> Result<(), Error> {
+    let date = DateTime::parse_aws("20150830T123600Z")?;
+    let case = "get-vanilla-query-order-key-case";
+    let creq = fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.creq", case, case))?;
+
+    let expected_sts = fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sts", case, case))?;
+    let encoded = encode_with_hex(creq.to_string());
+
+    let actual = string_to_sign(date, "us-east-1", "service", &encoded);
+    assert_eq!(expected_sts, actual);
+
+    Ok(())
+}
+
+#[test]
+fn test_signature_calculation() -> Result<(), Error> {
+    let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+    let creq = fs::read_to_string(format!("aws-sig-v4-test-suite/iam.creq"))?;
+    let date = DateTime::parse_aws("20150830T123600Z")?;
+
+    let signed = sign_string(&creq, secret, date.date(), "us-east-1", "iam");
+
+    let expected = "5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7";
+    assert_eq!(expected, signed);
+
+    Ok(())
+}
+
+#[test]
+fn test_generate_scope() -> Result<(), Error> {
+    let date = DateTime::parse_aws("20150830T123600Z")?;
+    let expected = "20150830/us-east-1/iam/aws4_request\n";
+    let actual = generate_scope(date, "us-east-1", "iam");
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[inline]
+fn hmac(secret: &[u8], message: &[u8]) -> Hmac<Sha256> {
+    let mut hmac = Hmac::<Sha256>::new_varkey(secret).expect("failed to create hmac");
+    hmac.input(message);
+    hmac
+}
+
+#[test]
+fn test_digest_of_canonical_request() -> Result<(), Error> {
+    let case = "get-vanilla-query-order-key-case";
+    let creq = fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.creq", case, case))?;
+    let actual = encode_with_hex(creq);
+    let expected = "816cd5b414d056048ba4f7c5386d6e0533120fb1fcfa93762cf0fc39e2cf19e0";
+
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+fn generate_scope(date: DateTime<Utc>, region: &str, service: &str) -> String {
+    format!(
+        "{}/{}/{}/aws4_request\n",
+        date.date().fmt_aws(),
+        region,
+        service
+    )
+}
+
+fn string_to_sign(date: DateTime<Utc>, region: &str, service: &str, hashed_creq: &str) -> String {
+    let scope = generate_scope(date, region, service);
+    format!("{}\n{}\n{}{}", HMAC_256, date.fmt_aws(), scope, hashed_creq)
+}
+
+// HMAC
+fn encode(s: String) -> Vec<u8> {
+    let calculated = digest::digest(&digest::SHA256, s.as_bytes());
+    calculated.as_ref().to_vec()
 }
 
 /// HashedPayload = Lowercase(HexEncode(Hash(requestPayload)))
-fn sign_payload(s: String) -> String {
-    let digest: Digest = digest::digest(&digest::SHA256, s.as_bytes());
+fn encode_with_hex(s: String) -> String {
+    let digest: RingDigest = digest::digest(&digest::SHA256, s.as_bytes());
     // no need to lower-case as in step six, as hex::encode
     // already returns a lower-cased string.
     hex::encode(digest)
+}
+
+fn calculate_signature(signing_key: Vec<u8>, string_to_sign: String) -> String {
+    let s_key = ringhmac::Key::new(ringhmac::HMAC_SHA256, signing_key.as_ref());
+    let tag = ringhmac::sign(&s_key, string_to_sign.as_bytes());
+
+    hex::encode(tag)
+}
+
+// kSecret = your secret access key
+// kDate = HMAC("AWS4" + kSecret, Date)
+// kRegion = HMAC(kDate, Region)
+// kService = HMAC(kRegion, Service)
+// kSigning = HMAC(kService, "aws4_request")
+fn generate_signing_key(secret: Key, date: Date<Utc>, region: &str, service: &str) -> Vec<u8> {
+    let mut ctx = ringhmac::Context::with_key(&secret);
+    ctx.update(date.fmt_aws().as_bytes());
+    ctx.update(region.as_bytes());
+    ctx.update(service.as_bytes());
+    ctx.update("aws4_request".as_bytes());
+    ctx.sign().as_ref().to_vec()
+}
+
+// kSecret = your secret access key
+// kDate = HMAC("AWS4" + kSecret, Date)
+// kRegion = HMAC(kDate, Region)
+// kService = HMAC(kRegion, Service)
+// kSigning = HMAC(kService, "aws4_request")
+fn generate_signing_key_2(secret: Key, date: Date<Utc>, region: &str, service: &str) -> Vec<u8> {
+    // sign date
+    let tag = ringhmac::sign(&secret, date.fmt_aws().as_bytes());
+
+    // sign region
+    let key = ringhmac::Key::new(ringhmac::HMAC_SHA256, tag.as_ref());
+    let tag = ringhmac::sign(&key, region.as_bytes());
+
+    // sign service
+    let key = ringhmac::Key::new(ringhmac::HMAC_SHA256, tag.as_ref());
+    let tag = ringhmac::sign(&key, service.as_bytes());
+
+    // sign request
+    let key = ringhmac::Key::new(ringhmac::HMAC_SHA256, tag.as_ref());
+    ringhmac::sign(&key, "aws4_request".as_bytes())
+        .as_ref()
+        .to_vec()
+}
+
+fn sign_string(
+    string_to_sign: &str,
+    secret: &str,
+    date: Date<Utc>,
+    region: &str,
+    service: &str,
+) -> String {
+    let date_str = date.fmt_aws();
+    let date_hmac = hmac(format!("AWS4{}", secret).as_bytes(), date_str.as_bytes())
+        .result()
+        .code();
+    let region_hmac = hmac(date_hmac.as_ref(), region.as_bytes()).result().code();
+    let service_hmac = hmac(region_hmac.as_ref(), service.as_bytes())
+        .result()
+        .code();
+    let signing_hmac = hmac(service_hmac.as_ref(), b"aws4_request").result().code();
+    hex::encode(
+        hmac(signing_hmac.as_ref(), string_to_sign.as_bytes())
+            .result()
+            .code()
+            .as_ref(),
+    )
 }
 
 fn parse_request(s: String) -> Result<Request<()>, Error> {
