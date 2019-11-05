@@ -13,7 +13,7 @@ use std::{
     cmp::{Ordering, PartialOrd},
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
-    fmt, fs, str,
+    fmt, str,
 };
 
 #[cfg(test)]
@@ -102,14 +102,14 @@ impl Ord for CanonicalHeaderName {
     }
 }
 
-#[derive(PartialEq, Debug)]
-struct Scope<'a> {
+#[derive(PartialEq, Debug, Clone)]
+struct Scope {
     date: Date<Utc>,
-    region: &'a str,
-    service: &'a str,
+    region: String,
+    service: String,
 }
 
-impl<'a> AsSigV4 for Scope<'a> {
+impl<'a> AsSigV4 for Scope {
     fn fmt(&self) -> String {
         format!(
             "{}/{}/{}/aws4_request",
@@ -120,33 +120,74 @@ impl<'a> AsSigV4 for Scope<'a> {
     }
 }
 
-#[derive(PartialEq, Debug)]
-struct StringToSign<'a> {
-    scope: Scope<'a>,
-    date: DateTime<Utc>,
-    region: &'a str,
-    service: &'a str,
-    hashed_creq: &'a str,
+impl<'a> FromStr for Scope {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Scope, Self::Err> {
+        let scopes = s
+            .split("/")
+            .map(|s| String::from(s))
+            .collect::<Vec<String>>();
+        let date = Date::<Utc>::parse_aws(&scopes[0])?;
+        let region = &scopes[1];
+        let service = &scopes[2];
+
+        let scope = Scope {
+            date,
+            region: region.to_string(),
+            service: service.to_string(),
+        };
+
+        Ok(scope)
+    }
 }
 
-impl<'a> StringToSign<'a> {
-    fn new(date: DateTime<Utc>, region: &'a str, service: &'a str, hashed_creq: &'a str) -> Self {
+#[derive(PartialEq, Debug)]
+struct StringToSign {
+    scope: Scope,
+    date: DateTime<Utc>,
+    region: String,
+    service: String,
+    hashed_creq: String,
+}
+
+impl FromStr for StringToSign {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lines = s.lines().map(|s| String::from(s)).collect::<Vec<String>>();
+        let date = DateTime::<Utc>::parse_aws(&lines[1])?;
+        let scope: Scope = lines[2].parse()?;
+        let hashed_creq = &lines[3];
+
+        let sts = StringToSign {
+            date: date,
+            region: String::from(&scope.region),
+            service: String::from(&scope.service),
+            scope: scope.clone(),
+            hashed_creq: hashed_creq.to_string(),
+        };
+
+        Ok(sts)
+    }
+}
+
+impl StringToSign {
+    fn new(date: DateTime<Utc>, region: &str, service: &str, hashed_creq: &str) -> Self {
         let scope = Scope {
             date: date.date(),
-            region,
-            service,
+            region: region.to_string(),
+            service: service.to_string(),
         };
         Self {
             scope,
             date,
-            region,
-            service,
-            hashed_creq,
+            region: region.to_string(),
+            service: service.to_string(),
+            hashed_creq: hashed_creq.to_string(),
         }
     }
 }
 
-impl<'a> AsSigV4 for StringToSign<'a> {
+impl AsSigV4 for StringToSign {
     fn fmt(&self) -> String {
         format!(
             "{}\n{}\n{}\n{}",
@@ -227,14 +268,12 @@ fn read_request() -> Result<(), Error> {
     //file-name.sreq— the signed request.
 
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
-    let s = fs::read_to_string(
-        "aws-sig-v4-test-suite/get-vanilla-query-order-key-case/get-vanilla-query-order-key-case.req",
-    )?;
-    let req = parse_request(s)?;
+    let s = read!(req: "get-vanilla-query-order-key-case")?;
+    let req = parse_request(s.as_bytes())?;
     let creq: CanonicalRequest = TryFrom::try_from(req)?;
 
     let actual = format!("{}", creq);
-    let expected = fs::read_to_string("aws-sig-v4-test-suite/get-vanilla-query-order-key-case/get-vanilla-query-order-key-case.creq")?;
+    let expected = read!(creq: "get-vanilla-query-order-key-case")?;
     assert_eq!(actual, expected);
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
@@ -256,11 +295,11 @@ fn read_request() -> Result<(), Error> {
 
 // add signature to authorization header
 // Authorization: algorithm Credential=access key ID/credential scope, SignedHeaders=SignedHeaders, Signature=signature
-fn build_authorization_header<'a>(
-    access_key: &'a str,
+fn build_authorization_header(
+    access_key: &str,
     creq: CanonicalRequest,
-    sts: StringToSign<'a>,
-    signature: &'a str,
+    sts: StringToSign,
+    signature: &str,
 ) -> String {
     format!(
         "{} Credential={}/{}, SignedHeaders={}, Signature={}",
@@ -274,10 +313,8 @@ fn build_authorization_header<'a>(
 
 #[test]
 fn test_build_authorization_header() -> Result<(), Error> {
-    let s = fs::read_to_string(
-        "aws-sig-v4-test-suite/get-vanilla-query-order-key-case/get-vanilla-query-order-key-case.req",
-    )?;
-    let req = parse_request(s)?;
+    let s = read!(req: "get-vanilla-query-order-key-case")?;
+    let req = parse_request(s.as_bytes())?;
     let creq: CanonicalRequest = TryFrom::try_from(req)?;
 
     let date = NaiveDateTime::parse_from_str("20150830T123600Z", DATE_FORMAT).unwrap();
@@ -325,10 +362,8 @@ fn date_format() -> Result<(), Error> {
 #[test]
 fn test_string_to_sign() -> Result<(), Error> {
     let date = DateTime::parse_aws("20150830T123600Z")?;
-    let case = "get-vanilla-query-order-key-case";
-    let creq = fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.creq", case, case))?;
-
-    let expected_sts = fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sts", case, case))?;
+    let creq = read!(creq: "get-vanilla-query-order-key-case")?;
+    let expected_sts = read!(sts: "get-vanilla-query-order-key-case")?;
     let encoded = encode_with_hex(creq);
 
     let actual = StringToSign::new(date, "us-east-1", "service", &encoded);
@@ -340,7 +375,7 @@ fn test_string_to_sign() -> Result<(), Error> {
 #[test]
 fn test_signature_calculation() -> Result<(), Error> {
     let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-    let creq = fs::read_to_string(format!("aws-sig-v4-test-suite/iam.creq"))?;
+    let creq = std::fs::read_to_string(format!("aws-sig-v4-test-suite/iam.creq"))?;
     let date = DateTime::parse_aws("20150830T123600Z")?;
 
     let derived_key = generate_signing_key(secret, date.date(), "us-east-1", "iam");
@@ -358,8 +393,8 @@ fn test_generate_scope() -> Result<(), Error> {
     let date = DateTime::parse_aws("20150830T123600Z")?;
     let scope = Scope {
         date: date.date(),
-        region: "us-east-1",
-        service: "iam",
+        region: "us-east-1".to_string(),
+        service: "iam".to_string(),
     };
     assert_eq!(format!("{}\n", scope.fmt()), expected);
 
@@ -367,9 +402,21 @@ fn test_generate_scope() -> Result<(), Error> {
 }
 
 #[test]
+fn parse_signed_request() -> Result<(), Error> {
+    let req = read!(sreq: "post-header-key-case")?;
+    let _: Request<()> = parse_request(req.as_bytes())?;
+    Ok(())
+}
+
+#[test]
+fn read_sts() -> Result<(), Error> {
+    let _: StringToSign = read!(sts: "get-vanilla-query-order-key-case")?.parse()?;
+    Ok(())
+}
+
+#[test]
 fn test_digest_of_canonical_request() -> Result<(), Error> {
-    let case = "get-vanilla-query-order-key-case";
-    let creq = fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.creq", case, case))?;
+    let creq = read!(creq: "get-vanilla-query-order-key-case")?;
     let actual = encode_with_hex(creq);
     let expected = "816cd5b414d056048ba4f7c5386d6e0533120fb1fcfa93762cf0fc39e2cf19e0";
 
@@ -421,34 +468,95 @@ fn generate_signing_key(secret: &str, date: Date<Utc>, region: &str, service: &s
     hmac::sign(&key, "aws4_request".as_bytes())
 }
 
-fn parse_request(s: String) -> Result<Request<()>, Error> {
-    let mut req = Request::builder();
-    let mut lines = s.lines();
+use httparse;
+use std::str::FromStr;
 
-    // handle protocol
-    let protocol = lines.next().unwrap();
-    let protocol = protocol.split(" ").collect::<Vec<&str>>();
-    req.method(protocol[0]);
-    let pq = PathAndQuery::from_shared(Bytes::from(protocol[1]))?;
-    let version = match protocol[2] {
-        "HTTP/1.1" => Version::HTTP_11,
-        "HTTP/2.0" => Version::HTTP_2,
+fn parse_request(s: &[u8]) -> Result<Request<()>, Error> {
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut req = httparse::Request::new(&mut headers);
+    let _ = req.parse(s).unwrap();
+
+    let version = match req.version.unwrap() {
+        1 => Version::HTTP_11,
         _ => unimplemented!(),
     };
-    req.version(version);
 
-    for h in lines {
-        let split = h.split(":").collect::<Vec<&str>>();
-        req.header(split[0], split[1]);
-        if split[0] == http::header::HOST {
-            let uri = Uri::builder()
-                .scheme("https")
-                .authority(split[1])
-                .path_and_query(pq.clone())
-                .build()?;
-            req.uri(uri);
+    let method = match req.method.unwrap() {
+        "GET" => Method::GET,
+        "POST" => Method::POST,
+        _ => unimplemented!(),
+    };
+
+    let mut builder = Request::builder();
+    if let Some(path) = req.path {
+        builder.uri(Uri::from_str(path)?);
+    }
+    builder.version(version);
+    builder.method(method);
+    for header in req.headers {
+        let name = header.name.to_lowercase();
+        if name != "" {
+            builder.header(&name, header.value);
         }
     }
-    let req = req.body(())?;
+
+    let req = builder.body(())?;
     Ok(req)
+}
+
+#[test]
+fn test_parse() -> Result<(), Error> {
+    let buf = read!(req: "post-header-key-case")?;
+    parse_request(buf.as_bytes())?;
+    Ok(())
+}
+
+#[test]
+fn test_read_query_params() -> Result<(), Error> {
+    let buf = read!(req: "get-vanilla-query-order-key-case")?;
+    parse_request(buf.as_bytes()).unwrap();
+    Ok(())
+}
+
+#[test]
+fn test_parse_headers() -> Result<(), Error> {
+    let buf = b"Host:example.amazonaws.com\nX-Amz-Date:20150830T123600Z\n\nblah blah";
+    let mut headers = [httparse::EMPTY_HEADER; 4];
+    assert_eq!(
+        httparse::parse_headers(buf, &mut headers),
+        Ok(httparse::Status::Complete((
+            56,
+            &[
+                httparse::Header {
+                    name: "Host",
+                    value: b"example.amazonaws.com"
+                },
+                httparse::Header {
+                    name: "X-Amz-Date",
+                    value: b"20150830T123600Z"
+                }
+            ][..]
+        )))
+    );
+
+    Ok(())
+}
+
+#[macro_export]
+macro_rules! read {
+    (req: $case:tt) => {
+        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.req", $case, $case))
+    };
+
+    (creq: $case:tt) => {
+        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.creq", $case, $case))
+    };
+
+    (sreq: $case:tt) => {
+        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sreq", $case, $case))
+    };
+
+    (sts: $case:tt) => {
+        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sts", $case, $case))
+    };
 }
