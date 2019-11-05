@@ -279,16 +279,30 @@ fn read_request() -> Result<(), Error> {
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
     let date = NaiveDateTime::parse_from_str("20150830T123600Z", DATE_FORMAT).unwrap();
     let date = DateTime::<Utc>::from_utc(date, Utc);
-    let creq = &encode_with_hex(creq.fmt());
-    let sts = StringToSign::new(date, "us-east-1", "iam", creq);
+    let encoded_creq = &encode_with_hex(creq.fmt());
+    let sts = StringToSign::new(date, "us-east-1", "service", encoded_creq);
 
     // Step 3: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-calculate-signature.html
     let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
 
-    let signing_key = generate_signing_key(secret, date.date(), "us-east-1", "iam");
+    let signing_key = generate_signing_key(secret, date.date(), "us-east-1", "service");
     let signature = calculate_signature(signing_key, &sts.fmt().as_bytes());
+    let access = "AKIDEXAMPLE";
 
     // step 4: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-add-signature-to-request.html
+    let authorization = build_authorization_header(access, creq, sts, &signature);
+    let x_azn_date = date.fmt_aws();
+
+    let s = read!(req: "get-vanilla-query-order-key-case")?;
+    let mut req = parse_request(s.as_bytes())?;
+
+    req.headers_mut()
+        .insert("authorization", authorization.parse()?);
+    req.headers_mut().insert("X-Amz-Date", x_azn_date.parse()?);
+    let expected = read!(sreq: "get-vanilla-query-order-key-case")?;
+    let expected = parse_request(expected.as_bytes())?;
+
+    assert_eq!(format!("{:?}", expected), format!("{:?}", req));
 
     Ok(())
 }
@@ -325,10 +339,8 @@ fn test_build_authorization_header() -> Result<(), Error> {
     let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
     let signing_key = generate_signing_key(secret, date.date(), "us-east-1", "service");
     let signature = calculate_signature(signing_key, &sts.fmt().as_bytes());
-    let expected_header = "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500";
-    let access_key = "AKIDEXAMPLE";
-
-    let header = build_authorization_header(access_key, creq, sts, &signature);
+    let expected_header = read!(authz: "get-vanilla-query-order-key-case")?;
+    let header = build_authorization_header("AKIDEXAMPLE", creq, sts, &signature);
     assert_eq!(expected_header, header);
 
     Ok(())
@@ -558,5 +570,9 @@ macro_rules! read {
 
     (sts: $case:tt) => {
         std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sts", $case, $case))
+    };
+
+    (authz: $case:tt) => {
+        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.authz", $case, $case))
     };
 }
