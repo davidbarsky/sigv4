@@ -1,4 +1,8 @@
-use crate::{sign::encode_with_hex, DATE_FORMAT, HMAC_256};
+use crate::{
+    sign::{encode_bytes_with_hex, encode_with_hex},
+    DATE_FORMAT, HMAC_256,
+};
+use bytes::Bytes;
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use eliza_error::Error;
 use http::{header::HeaderName, HeaderMap, Method, Request};
@@ -51,9 +55,9 @@ impl TryFrom<Request<()>> for CanonicalRequest {
     }
 }
 
-impl TryFrom<&Request<String>> for CanonicalRequest {
+impl TryFrom<&Request<Bytes>> for CanonicalRequest {
     type Error = Error;
-    fn try_from(req: &Request<String>) -> Result<Self, Self::Error> {
+    fn try_from(req: &Request<Bytes>) -> Result<Self, Self::Error> {
         let mut creq = CanonicalRequest::default();
         creq.method = req.method().clone();
         creq.path = req.uri().path_and_query().unwrap().path().to_string();
@@ -71,7 +75,7 @@ impl TryFrom<&Request<String>> for CanonicalRequest {
         }
         creq.signed_headers = SignedHeaders { inner: headers };
         creq.headers = req.headers().clone();
-        let payload = encode_with_hex(req.body().to_string());
+        let payload = encode_bytes_with_hex(req.body());
         creq.payload_hash = payload;
         Ok(creq)
     }

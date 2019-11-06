@@ -1,10 +1,15 @@
+use bytes::Bytes;
 use chrono::Utc;
 use eliza_error::Error;
-use http::Request;
+use http::{header, Request};
+use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, str};
 
-const HMAC_256: &'static str = "AWS4-HMAC-SHA256";
-const DATE_FORMAT: &'static str = "%Y%m%dT%H%M%SZ";
+pub const HMAC_256: &'static str = "AWS4-HMAC-SHA256";
+pub const DATE_FORMAT: &'static str = "%Y%m%dT%H%M%SZ";
+pub const X_AMZ_SECURITY_TOKEN: &'static str = "x-amz-security-token";
+pub const X_AMZ_DATE: &'static str = "x-amz-date";
+pub const X_AMZ_TARGET: &'static str = "x-amz-target";
 
 pub mod sign;
 pub mod types;
@@ -12,10 +17,9 @@ pub mod types;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
-pub fn sign(req: Request<String>) -> Result<Request<String>, Error> {
+pub fn sign(mut req: Request<Bytes>, credential: Credentials) -> Result<Request<Bytes>, Error> {
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let creq: CanonicalRequest = TryFrom::try_from(&req)?;
-    let mut req = req;
 
     let region = req
         .get_region()
@@ -25,7 +29,7 @@ pub fn sign(req: Request<String>) -> Result<Request<String>, Error> {
         .get_service()
         .expect("Missing region, this is a bug.")
         .inner;
-    let credential = req.get_credential().expect("Missing credential");
+    let token = &credential.security_token;
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
     let date = Utc::now();
@@ -40,9 +44,13 @@ pub fn sign(req: Request<String>) -> Result<Request<String>, Error> {
     let authorization = build_authorization_header(&credential.access_key, creq, sts, &signature);
     let x_azn_date = date.fmt_aws();
 
+    // let mut req = req;
     let headers = req.headers_mut();
-    headers.insert("authorization", authorization.parse()?);
-    headers.insert("X-Amz-Date", x_azn_date.parse()?);
+    headers.insert(header::AUTHORIZATION, authorization.parse()?);
+    headers.insert(X_AMZ_DATE, x_azn_date.parse()?);
+    if let Some(token) = token {
+        headers.insert(X_AMZ_SECURITY_TOKEN, token.parse()?);
+    }
 
     Ok(req)
 }
@@ -69,22 +77,35 @@ impl Region {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Credentials {
-    access_key: String,
-    secret_key: String,
+    #[serde(rename = "aws_access_key_id")]
+    pub access_key: String,
+    #[serde(rename = "aws_secret_access_key")]
+    pub secret_key: String,
+    #[serde(rename = "aws_session_token")]
+    pub security_token: Option<String>,
 }
 
 impl Credentials {
-    pub fn new<T: ToString>(access_key: T, secret_key: T) -> Self {
+    pub fn new<T: ToString>(access_key: T, secret_key: T, security_token: Option<T>) -> Self {
         Self {
             access_key: access_key.to_string(),
             secret_key: secret_key.to_string(),
+            security_token: security_token.map(|token| token.to_string()),
         }
     }
 }
 
-impl RequestExt for Request<String> {
+pub trait RequestExt {
+    fn set_service(&mut self, svc: Service);
+    fn get_service(&self) -> Option<&Service>;
+
+    fn set_region(&mut self, region: Region);
+    fn get_region(&self) -> Option<&Region>;
+}
+
+impl<T> RequestExt for Request<T> {
     fn set_service(&mut self, svc: Service) {
         self.extensions_mut().insert(svc);
     }
@@ -97,23 +118,6 @@ impl RequestExt for Request<String> {
     fn get_region(&self) -> Option<&Region> {
         self.extensions().get::<Region>()
     }
-    fn set_credential(&mut self, credentials: Credentials) {
-        self.extensions_mut().insert(credentials);
-    }
-    fn get_credential(&self) -> Option<&Credentials> {
-        self.extensions().get::<Credentials>()
-    }
-}
-
-pub trait RequestExt {
-    fn set_service(&mut self, svc: Service);
-    fn get_service(&self) -> Option<&Service>;
-
-    fn set_region(&mut self, region: Region);
-    fn get_region(&self) -> Option<&Region>;
-
-    fn set_credential(&mut self, credentials: Credentials);
-    fn get_credential(&self) -> Option<&Credentials>;
 }
 
 #[cfg(test)]
