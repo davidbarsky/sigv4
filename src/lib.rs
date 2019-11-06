@@ -68,7 +68,7 @@ impl Service {
 
 #[derive(Debug, PartialEq)]
 pub struct Region {
-    inner: &'static str,
+    pub inner: &'static str,
 }
 
 impl Region {

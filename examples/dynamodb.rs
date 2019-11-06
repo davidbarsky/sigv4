@@ -3,9 +3,10 @@ use eliza_error::Error;
 use futures::stream::TryStreamExt;
 use http::{
     header::{CONTENT_TYPE, HOST},
-    Method, Request, Uri, Version,
+    HttpTryFrom, Method, Request, Response, Uri, Version,
 };
-use hyper::{Body, Client};
+use hyper::{client::HttpConnector, Body, Client};
+use hyper_rustls::HttpsConnector;
 use serde_json::json;
 
 use sigv4::{sign, Credentials, Region, RequestExt, Service, X_AMZ_TARGET};
@@ -21,44 +22,82 @@ fn load_credentials() -> Result<Credentials, Error> {
     })
 }
 
+trait IntoRequest {
+    fn into_request(self, region: Region) -> Result<Request<Bytes>, Error>;
+}
+
+#[derive(Debug, PartialEq)]
+struct CreateTableRequest {
+    table_name: String,
+}
+
+impl IntoRequest for CreateTableRequest {
+    fn into_request(self, region: Region) -> Result<Request<Bytes>, Error> {
+        let uri = format!("https://dynamodb.{}.amazonaws.com/", region.inner);
+        let host = format!("dynamodb.{}.amazonaws.com", region.inner);
+        let uri = Uri::try_from(uri)?;
+
+        let mut builder = Request::builder();
+        builder
+            .method(Method::POST)
+            .uri(uri)
+            .version(Version::HTTP_11);
+        let headers = builder.headers_mut().expect("Missing headers");
+        headers.insert(CONTENT_TYPE, "application/x-amz-json-1.0".parse()?);
+        headers.insert(HOST, host.parse()?);
+        headers.insert(X_AMZ_TARGET, "DynamoDB_20120810.CreateTable".parse()?);
+
+        let params = json!({
+            "KeySchema": [{"KeyType": "HASH","AttributeName": "Id"}],
+            "TableName": self.table_name,
+            "AttributeDefinitions": [{"AttributeName": "Id","AttributeType": "S"}],
+            "ProvisionedThroughput": {"WriteCapacityUnits": 1,"ReadCapacityUnits": 1}
+        });
+        let params = serde_json::to_vec(&params)?;
+
+        let mut req = builder.body(Bytes::from(params))?;
+        req.set_service(Service::new("dynamodb"));
+        req.set_region(region);
+        Ok(req)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let https = hyper_rustls::HttpsConnector::new();
-    let client: Client<_, hyper::Body> = Client::builder().build(https);
+    let client = AWSClient::new();
 
-    let uri = Uri::from_static("https://dynamodb.us-east-1.amazonaws.com/");
-    let mut builder = Request::builder();
-    builder
-        .method(Method::POST)
-        .uri(uri)
-        .version(Version::HTTP_11);
-    let headers = builder.headers_mut().expect("Missing headers");
-    headers.insert(CONTENT_TYPE, "application/x-amz-json-1.0".parse()?);
-    headers.insert(HOST, "dynamodb.us-east-1.amazonaws.com".parse()?);
-    headers.insert(X_AMZ_TARGET, "DynamoDB_20120810.CreateTable".parse()?);
+    let req = CreateTableRequest {
+        table_name: "example_table".to_string(),
+    };
+    let res = client.call(req).await?;
 
-    let params = json!({
-        "KeySchema": [{"KeyType": "HASH","AttributeName": "Id"}],
-        "TableName": "TestTable",
-        "AttributeDefinitions": [{"AttributeName": "Id","AttributeType": "S"}],
-        "ProvisionedThroughput": {"WriteCapacityUnits": 1,"ReadCapacityUnits": 1}
-    });
-    let params = serde_json::to_vec(&params)?;
-    let mut req = builder.body(Bytes::from(params))?;
-
-    req.set_service(Service::new("dynamodb"));
-    req.set_region(Region::new("us-east-1"));
-    let credentials = load_credentials()?;
-
-    let signed = reconstruct(sign(req, credentials)?);
-    let res = client.request(signed).await?;
-    let (headers, body) = res.into_parts();
-    println!("{:?}", headers);
-    let body = body.try_concat().await?;
-    let tables = serde_json::from_slice::<serde_json::Value>(&body)?;
-    println!("{}", tables);
+    let body = res.into_body().try_concat().await?;
+    let response = serde_json::from_slice::<serde_json::Value>(&body)?;
+    println!("{}", response);
 
     Ok(())
+}
+
+struct AWSClient {
+    inner: Client<HttpsConnector<HttpConnector>, Body>,
+}
+
+impl AWSClient {
+    fn new() -> Self {
+        let https = hyper_rustls::HttpsConnector::new();
+        let inner: Client<_, hyper::Body> = Client::builder().build(https);
+        Self { inner }
+    }
+
+    async fn call<T: IntoRequest>(&self, req: T) -> Result<Response<Body>, Error> {
+        let credentials = load_credentials()?;
+        let signed = reconstruct(sign(
+            req.into_request(Region { inner: "us-east-1" })?,
+            credentials,
+        )?);
+        let res = self.inner.request(signed).await?;
+        Ok(res)
+    }
 }
 
 fn reconstruct(req: Request<Bytes>) -> Request<Body> {
