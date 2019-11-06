@@ -1,5 +1,4 @@
 use crate::{sign::encode_with_hex, DATE_FORMAT, HMAC_256};
-use bytes::Bytes;
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use eliza_error::Error;
 use http::{header::HeaderName, HeaderMap, Method, Request};

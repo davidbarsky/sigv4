@@ -27,7 +27,7 @@ async fn main() -> Result<(), Error> {
 
     let params = json!({
         "KeySchema": [{"KeyType": "HASH","AttributeName": "Id"}],
-        "TableName": "TestTable2",
+        "TableName": "TestTable",
         "AttributeDefinitions": [{"AttributeName": "Id","AttributeType": "S"}],
         "ProvisionedThroughput": {"WriteCapacityUnits": 1,"ReadCapacityUnits": 1}
     });

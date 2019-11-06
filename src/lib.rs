@@ -1,8 +1,7 @@
 use chrono::Utc;
 use eliza_error::Error;
-use http::{Method, Request, Uri, Version};
-use httparse;
-use std::{convert::TryFrom, str, str::FromStr};
+use http::Request;
+use std::{convert::TryFrom, str};
 
 const HMAC_256: &'static str = "AWS4-HMAC-SHA256";
 const DATE_FORMAT: &'static str = "%Y%m%dT%H%M%SZ";
@@ -122,15 +121,15 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        assert_req_eq, build_authorization_header, parse_request, read,
+        assert_req_eq, build_authorization_header, read,
         sign::{calculate_signature, encode_with_hex, generate_signing_key},
         types::{AsSigV4, CanonicalRequest, DateExt, DateTimeExt, Scope, StringToSign},
         DATE_FORMAT,
     };
     use chrono::{Date, DateTime, NaiveDateTime, Utc};
     use eliza_error::Error;
-    use http::Request;
-    use std::convert::TryFrom;
+    use http::{Method, Request, Uri, Version};
+    use std::{convert::TryFrom, str::FromStr};
 
     #[test]
     fn read_request() -> Result<(), Error> {
@@ -327,6 +326,39 @@ mod tests {
         assert_eq!(expected, actual);
         Ok(())
     }
+
+    fn parse_request(s: &[u8]) -> Result<Request<()>, Error> {
+        let mut headers = [httparse::EMPTY_HEADER; 64];
+        let mut req = httparse::Request::new(&mut headers);
+        let _ = req.parse(s).unwrap();
+
+        let version = match req.version.unwrap() {
+            1 => Version::HTTP_11,
+            _ => unimplemented!(),
+        };
+
+        let method = match req.method.unwrap() {
+            "GET" => Method::GET,
+            "POST" => Method::POST,
+            _ => unimplemented!(),
+        };
+
+        let mut builder = Request::builder();
+        if let Some(path) = req.path {
+            builder.uri(Uri::from_str(path)?);
+        }
+        builder.version(version);
+        builder.method(method);
+        for header in req.headers {
+            let name = header.name.to_lowercase();
+            if name != "" {
+                builder.header(&name, header.value);
+            }
+        }
+
+        let req = builder.body(())?;
+        Ok(req)
+    }
 }
 
 // add signature to authorization header
@@ -345,39 +377,6 @@ fn build_authorization_header(
         creq.signed_headers,
         signature
     )
-}
-
-fn parse_request(s: &[u8]) -> Result<Request<()>, Error> {
-    let mut headers = [httparse::EMPTY_HEADER; 64];
-    let mut req = httparse::Request::new(&mut headers);
-    let _ = req.parse(s).unwrap();
-
-    let version = match req.version.unwrap() {
-        1 => Version::HTTP_11,
-        _ => unimplemented!(),
-    };
-
-    let method = match req.method.unwrap() {
-        "GET" => Method::GET,
-        "POST" => Method::POST,
-        _ => unimplemented!(),
-    };
-
-    let mut builder = Request::builder();
-    if let Some(path) = req.path {
-        builder.uri(Uri::from_str(path)?);
-    }
-    builder.version(version);
-    builder.method(method);
-    for header in req.headers {
-        let name = header.name.to_lowercase();
-        if name != "" {
-            builder.header(&name, header.value);
-        }
-    }
-
-    let req = builder.body(())?;
-    Ok(req)
 }
 
 #[macro_export]
