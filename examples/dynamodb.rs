@@ -3,9 +3,9 @@ use eliza_error::Error;
 use futures::stream::TryStreamExt;
 use http::{
     header::{CONTENT_TYPE, HOST},
-    HttpTryFrom, Method, Request, Response, Uri, Version,
+    Method, Request, Response, Uri, Version,
 };
-use hyper::{client::HttpConnector, Body, Client};
+// use hyper::{client::HttpConnector, Body, Client};
 use hyper_rustls::HttpsConnector;
 use serde_json::json;
 

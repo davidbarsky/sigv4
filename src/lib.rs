@@ -2,6 +2,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use eliza_error::Error;
 use http::{header, Request};
+use http_body::Body;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, str};
 
@@ -17,7 +18,10 @@ pub mod types;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
-pub fn sign(mut req: Request<Bytes>, credential: Credentials) -> Result<Request<Bytes>, Error> {
+pub fn sign<T>(mut req: Request<Bytes>, credential: Credentials) -> Result<Request<Bytes>, Error>
+where
+    T: Body,
+{
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let creq: CanonicalRequest = TryFrom::try_from(&req)?;
 
@@ -209,8 +213,8 @@ mod tests {
         let date = DateTime::parse_aws("20150830T123600Z")?;
         let scope = Scope {
             date: date.date(),
-            region: "us-east-1".to_string(),
-            service: "iam".to_string(),
+            region: "us-east-1",
+            service: "iam",
         };
         assert_eq!(format!("{}\n", scope.fmt()), expected);
 
@@ -317,7 +321,8 @@ mod tests {
 
     #[test]
     fn read_sts() -> Result<(), Error> {
-        let _: StringToSign = read!(sts: "get-vanilla-query-order-key-case")?.parse()?;
+        let sts = read!(sts: "get-vanilla-query-order-key-case")?;
+        let _ = StringToSign::try_from(sts.as_ref())?;
         Ok(())
     }
 
@@ -347,16 +352,16 @@ mod tests {
             _ => unimplemented!(),
         };
 
-        let mut builder = Request::builder();
+        let builder = Request::builder();
+        let builder = builder.version(version);
+        let mut builder = builder.method(method);
         if let Some(path) = req.path {
-            builder.uri(Uri::from_str(path)?);
+            builder = builder.uri(Uri::from_str(path)?);
         }
-        builder.version(version);
-        builder.method(method);
         for header in req.headers {
             let name = header.name.to_lowercase();
             if name != "" {
-                builder.header(&name, header.value);
+                builder = builder.header(&name, header.value);
             }
         }
 

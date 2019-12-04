@@ -19,8 +19,8 @@ fn load_credentials() -> Result<Credentials, Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let https = hyper_rustls::HttpsConnector::new();
-    let client: Client<_, hyper::Body> = Client::builder().build(https);
+    // let https = hyper_rustls::HttpsConnector::new();
+    let client: Client<_, hyper::Body> = Client::new();
 
     let uri =
         Uri::from_static("https://ec2.amazonaws.com/?Action=DescribeRegions&Version=2013-10-15");

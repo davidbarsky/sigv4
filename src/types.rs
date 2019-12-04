@@ -12,7 +12,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
     fmt,
-    str::FromStr,
 };
 
 pub(crate) trait AsSigV4 {
@@ -148,13 +147,13 @@ impl Ord for CanonicalHeaderName {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub(crate) struct Scope {
+pub(crate) struct Scope<'a> {
     pub(crate) date: Date<Utc>,
-    pub(crate) region: String,
-    pub(crate) service: String,
+    pub(crate) region: &'a str,
+    pub(crate) service: &'a str,
 }
 
-impl<'a> AsSigV4 for Scope {
+impl<'a> AsSigV4 for Scope<'a> {
     fn fmt(&self) -> String {
         format!(
             "{}/{}/{}/aws4_request",
@@ -165,21 +164,18 @@ impl<'a> AsSigV4 for Scope {
     }
 }
 
-impl<'a> FromStr for Scope {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Scope, Self::Err> {
-        let scopes = s
-            .split("/")
-            .map(|s| String::from(s))
-            .collect::<Vec<String>>();
-        let date = Date::<Utc>::parse_aws(&scopes[0])?;
-        let region = &scopes[1];
-        let service = &scopes[2];
+impl<'a> TryFrom<&'a str> for Scope<'a> {
+    type Error = Error;
+    fn try_from(s: &'a str) -> Result<Scope<'a>, Self::Error> {
+        let mut scopes = s.split("/");
+        let date = Date::<Utc>::parse_aws(scopes.next().expect("missing date"))?;
+        let region = scopes.next().expect("missing date");
+        let service = scopes.next().expect("missing date");
 
         let scope = Scope {
             date,
-            region: region.to_string(),
-            service: service.to_string(),
+            region,
+            service,
         };
 
         Ok(scope)
@@ -187,52 +183,57 @@ impl<'a> FromStr for Scope {
 }
 
 #[derive(PartialEq, Debug)]
-pub(crate) struct StringToSign {
-    pub(crate) scope: Scope,
+pub(crate) struct StringToSign<'a> {
+    pub(crate) scope: Scope<'a>,
     pub(crate) date: DateTime<Utc>,
-    pub(crate) region: String,
-    pub(crate) service: String,
-    pub(crate) hashed_creq: String,
+    pub(crate) region: &'a str,
+    pub(crate) service: &'a str,
+    pub(crate) hashed_creq: &'a str,
 }
 
-impl FromStr for StringToSign {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let lines = s.lines().map(|s| String::from(s)).collect::<Vec<String>>();
+impl<'a> TryFrom<&'a str> for StringToSign<'a> {
+    type Error = Error;
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        let lines = s.lines().collect::<Vec<&str>>();
         let date = DateTime::<Utc>::parse_aws(&lines[1])?;
-        let scope: Scope = lines[2].parse()?;
+        let scope: Scope = TryFrom::try_from(lines[2])?;
         let hashed_creq = &lines[3];
 
         let sts = StringToSign {
             date,
-            region: String::from(&scope.region),
-            service: String::from(&scope.service),
-            scope: scope.clone(),
-            hashed_creq: hashed_creq.to_string(),
+            region: scope.region,
+            service: scope.service,
+            scope,
+            hashed_creq,
         };
 
         Ok(sts)
     }
 }
 
-impl StringToSign {
-    pub(crate) fn new(date: DateTime<Utc>, region: &str, service: &str, hashed_creq: &str) -> Self {
+impl<'a> StringToSign<'a> {
+    pub(crate) fn new(
+        date: DateTime<Utc>,
+        region: &'a str,
+        service: &'a str,
+        hashed_creq: &'a str,
+    ) -> Self {
         let scope = Scope {
             date: date.date(),
-            region: region.to_string(),
-            service: service.to_string(),
+            region,
+            service,
         };
         Self {
             scope,
             date,
-            region: region.to_string(),
-            service: service.to_string(),
-            hashed_creq: hashed_creq.to_string(),
+            region,
+            service,
+            hashed_creq,
         }
     }
 }
 
-impl AsSigV4 for StringToSign {
+impl<'a> AsSigV4 for StringToSign<'a> {
     fn fmt(&self) -> String {
         format!(
             "{}\n{}\n{}\n{}",
