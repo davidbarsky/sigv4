@@ -41,7 +41,7 @@ async fn main() -> Result<(), Error> {
     let res = client.request(signed).await?;
     let (headers, body) = res.into_parts();
     println!("{:?}", headers);
-    let body = body.try_concat().await?;
+    let body = body.data().await?;
     let body = Bytes::from(body);
     println!("{:?}", body);
 

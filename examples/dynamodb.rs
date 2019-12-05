@@ -5,8 +5,7 @@ use http::{
     header::{CONTENT_TYPE, HOST},
     Method, Request, Response, Uri, Version,
 };
-// use hyper::{client::HttpConnector, Body, Client};
-use hyper_rustls::HttpsConnector;
+use hyper::{client::HttpConnector, Body, Client};
 use serde_json::json;
 
 use sigv4::{sign, Credentials, Region, RequestExt, Service, X_AMZ_TARGET};
@@ -200,7 +199,7 @@ impl IntoRequest for PutItemRequest {
 }
 
 struct AWSClient {
-    inner: Client<HttpsConnector<HttpConnector>, Body>,
+    inner: Client<HttpConnector, Body>,
     region: &'static str,
 }
 
