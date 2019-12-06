@@ -1,12 +1,13 @@
 use bytes::Bytes;
 use eliza_error::Error;
-use futures::stream::TryStreamExt;
 use http::{
     header::{CONTENT_TYPE, HOST},
     Method, Request, Response, Uri, Version,
 };
+use http_body::Body as _;
 use hyper::{client::HttpConnector, Body, Client};
 use serde_json::json;
+use std::convert::TryFrom;
 
 use sigv4::{sign, Credentials, Region, RequestExt, Service, X_AMZ_TARGET};
 
@@ -65,7 +66,11 @@ async fn main() -> Result<(), Error> {
 }
 
 async fn read_response(res: Response<Body>) -> Result<(), Error> {
-    let body = res.into_body().try_concat().await?;
+    let mut res = res;
+    let mut body = vec![];
+    while let Some(Ok(chunk)) = res.body_mut().data().await {
+        body.extend_from_slice(&chunk);
+    }
     let response = serde_json::from_slice::<serde_json::Value>(&body)?;
     println!("{:?}", response);
     Ok(())
@@ -86,8 +91,8 @@ trait IntoRequest {
         let uri = Uri::try_from(uri)?;
         let operation_name = format!("DynamoDB_20120810.{}", Self::OPERATION_NAME);
 
-        let mut builder = Request::builder();
-        builder
+        let builder = Request::builder();
+        let mut builder = builder
             .method(Method::POST)
             .uri(uri)
             .version(Version::HTTP_11);
@@ -199,13 +204,13 @@ impl IntoRequest for PutItemRequest {
 }
 
 struct AWSClient {
-    inner: Client<HttpConnector, Body>,
+    inner: Client<hyper_tls::HttpsConnector<HttpConnector>, Body>,
     region: &'static str,
 }
 
 impl AWSClient {
     fn new(region: Region) -> Self {
-        let https = hyper_rustls::HttpsConnector::new();
+        let https = hyper_tls::HttpsConnector::new().unwrap();
         let inner: Client<_, hyper::Body> = Client::builder().build(https);
         Self {
             inner,

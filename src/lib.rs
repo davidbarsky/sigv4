@@ -18,10 +18,7 @@ pub mod types;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
-pub fn sign<T>(mut req: Request<Bytes>, credential: Credentials) -> Result<Request<Bytes>, Error>
-where
-    T: Body,
-{
+pub fn sign(mut req: Request<Bytes>, credential: Credentials) -> Result<Request<Bytes>, Error> {
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let creq: CanonicalRequest = TryFrom::try_from(&req)?;
 

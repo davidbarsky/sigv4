@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use eliza_error::Error;
-use futures::stream::TryStreamExt;
 use http::{header, Method, Request, Uri, Version};
+use http_body::Body as _;
 use hyper::{Body, Client};
 
 use sigv4::{sign, Credentials, Region, RequestExt, Service};
@@ -24,8 +24,8 @@ async fn main() -> Result<(), Error> {
 
     let uri =
         Uri::from_static("https://ec2.amazonaws.com/?Action=DescribeRegions&Version=2013-10-15");
-    let mut builder = Request::builder();
-    builder
+    let builder = Request::builder();
+    let mut builder = builder
         .method(Method::POST)
         .uri(uri)
         .version(Version::HTTP_11);
@@ -38,11 +38,11 @@ async fn main() -> Result<(), Error> {
     let credentials = load_credentials()?;
 
     let signed = reconstruct(sign(req, credentials)?);
-    let res = client.request(signed).await?;
-    let (headers, body) = res.into_parts();
-    println!("{:?}", headers);
-    let body = body.data().await?;
-    let body = Bytes::from(body);
+    let mut res = client.request(signed).await?;
+    let mut body = vec![];
+    while let Some(Ok(chunk)) = res.body_mut().data().await {
+        body.extend_from_slice(&chunk);
+    }
     println!("{:?}", body);
 
     Ok(())
