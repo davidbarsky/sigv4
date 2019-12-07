@@ -8,8 +8,9 @@ use http_body::Body as _;
 use hyper::{client::HttpConnector, Body, Client};
 use serde_json::json;
 use std::convert::TryFrom;
+use tower::{Service, builder::ServiceBuilder};
 
-use sigv4::{sign, Credentials, Region, RequestExt, Service, X_AMZ_TARGET};
+use sigv4::{sign, SignerLayer, Signer, Credentials, Region, RequestExt, SignedService, X_AMZ_TARGET};
 
 fn load_credentials() -> Result<Credentials, Error> {
     let access = std::env::var("AWS_ACCESS_KEY_ID")?;
@@ -103,7 +104,7 @@ trait IntoRequest {
 
         let params = serde_json::to_vec(&self.params())?;
         let mut req = builder.body(Bytes::from(params))?;
-        req.set_service(Service::new("dynamodb"));
+        req.set_service(SignedService::new("dynamodb"));
         req.set_region(region);
         Ok(req)
     }
@@ -204,27 +205,32 @@ impl IntoRequest for PutItemRequest {
 }
 
 struct AWSClient {
-    inner: Client<hyper_tls::HttpsConnector<HttpConnector>, Body>,
+    svc: Signer<Client<hyper_tls::HttpsConnector<HttpConnector>, Body>>,
     region: &'static str,
 }
 
 impl AWSClient {
     fn new(region: Region) -> Self {
-        let https = hyper_tls::HttpsConnector::new().unwrap();
+        let credentials = load_credentials().unwrap();
+        let https = hyper_tls::HttpsConnector::new();
         let inner: Client<_, hyper::Body> = Client::builder().build(https);
+
+        let svc = ServiceBuilder::new()
+            .layer(SignerLayer { creds: credentials })
+            .service(inner);
+            
         Self {
-            inner,
+            svc,
             region: region.inner,
         }
     }
 
-    async fn call<T: IntoRequest>(&self, req: T) -> Result<Response<Body>, Error> {
+    async fn call<T: IntoRequest>(&mut self, req: T) -> Result<Response<Body>, Error> {
+        let mut req = req.into_request(Region { inner: self.region })?;
         let credentials = load_credentials()?;
-        let signed = reconstruct(sign(
-            req.into_request(Region { inner: self.region })?,
-            credentials,
-        )?);
-        let res = self.inner.request(signed).await?;
+        // sign(&mut req, &credentials)?;
+        let req = reconstruct(req);
+        let res = self.svc.call(req).await?;
         Ok(res)
     }
 }

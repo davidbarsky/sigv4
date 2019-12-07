@@ -4,7 +4,7 @@ use http::{header, Method, Request, Uri, Version};
 use http_body::Body as _;
 use hyper::{Body, Client};
 
-use sigv4::{sign, Credentials, Region, RequestExt, Service};
+use sigv4::{sign, Credentials, Region, RequestExt, SignedService};
 
 fn load_credentials() -> Result<Credentials, Error> {
     let access = std::env::var("AWS_ACCESS_KEY_ID")?;
@@ -19,8 +19,8 @@ fn load_credentials() -> Result<Credentials, Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    // let https = hyper_rustls::HttpsConnector::new();
-    let client: Client<_, hyper::Body> = Client::new();
+    let https = hyper_tls::HttpsConnector::new();
+    let client: Client<_, hyper::Body> = Client::builder().build(https);
 
     let uri =
         Uri::from_static("https://ec2.amazonaws.com/?Action=DescribeRegions&Version=2013-10-15");
@@ -33,12 +33,13 @@ async fn main() -> Result<(), Error> {
     headers.insert(header::HOST, "ec2.amazonaws.com".parse()?);
 
     let mut req = builder.body(Bytes::new())?;
-    req.set_service(Service::new("ec2"));
+    req.set_service(SignedService::new("ec2"));
     req.set_region(Region::new("us-east-1"));
     let credentials = load_credentials()?;
 
-    let signed = reconstruct(sign(req, credentials)?);
-    let mut res = client.request(signed).await?;
+    sign(&mut req, &credentials)?;
+    let req = reconstruct(req);
+    let mut res = client.request(req).await?;
     let mut body = vec![];
     while let Some(Ok(chunk)) = res.body_mut().data().await {
         body.extend_from_slice(&chunk);

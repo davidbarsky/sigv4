@@ -1,8 +1,7 @@
 use crate::{
-    sign::{encode_bytes_with_hex, encode_with_hex},
+    sign::encode_bytes_with_hex,
     DATE_FORMAT, HMAC_256,
 };
-use bytes::Bytes;
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use eliza_error::Error;
 use http::{header::HeaderName, HeaderMap, Method, Request};
@@ -10,7 +9,7 @@ use serde_urlencoded as qs;
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
-    convert::TryFrom,
+    convert::{TryFrom, AsRef},
     fmt,
 };
 
@@ -28,9 +27,11 @@ pub(crate) struct CanonicalRequest {
     pub(crate) payload_hash: String,
 }
 
-impl TryFrom<Request<()>> for CanonicalRequest {
-    type Error = Error;
-    fn try_from(req: Request<()>) -> Result<Self, Self::Error> {
+impl CanonicalRequest {
+    pub(crate) fn from<B>(req: &mut Request<B>) -> Result<CanonicalRequest, Error>
+    where
+        B: AsRef<[u8]>,
+    {
         let mut creq = CanonicalRequest::default();
         creq.method = req.method().clone();
         creq.path = req.uri().path_and_query().unwrap().path().to_string();
@@ -48,33 +49,8 @@ impl TryFrom<Request<()>> for CanonicalRequest {
         }
         creq.signed_headers = SignedHeaders { inner: headers };
         creq.headers = req.headers().clone();
-        let payload = encode_with_hex(String::new());
-        creq.payload_hash = payload;
-        Ok(creq)
-    }
-}
-
-impl TryFrom<&Request<Bytes>> for CanonicalRequest {
-    type Error = Error;
-    fn try_from(req: &Request<Bytes>) -> Result<Self, Self::Error> {
-        let mut creq = CanonicalRequest::default();
-        creq.method = req.method().clone();
-        creq.path = req.uri().path_and_query().unwrap().path().to_string();
-
-        if let Some(pq) = req.uri().path_and_query() {
-            if let Some(path) = pq.query() {
-                let params: BTreeMap<String, String> = qs::from_str(path)?;
-                creq.params = qs::to_string(params)?;
-            }
-        }
-
-        let mut headers = BTreeSet::new();
-        for (name, _) in req.headers() {
-            headers.insert(CanonicalHeaderName(name.clone()));
-        }
-        creq.signed_headers = SignedHeaders { inner: headers };
-        creq.headers = req.headers().clone();
-        let payload = encode_bytes_with_hex(req.body());
+        let body: &[u8] = req.body().as_ref();
+        let payload = encode_bytes_with_hex(body);
         creq.payload_hash = payload;
         Ok(creq)
     }

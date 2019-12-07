@@ -1,10 +1,10 @@
-use bytes::Bytes;
 use chrono::Utc;
 use eliza_error::Error;
 use http::{header, Request};
-use http_body::Body;
+use std::task;
 use serde::{Deserialize, Serialize};
-use std::{convert::TryFrom, str};
+use std::str;
+use tower::{Service, layer::Layer};
 
 pub const HMAC_256: &'static str = "AWS4-HMAC-SHA256";
 pub const DATE_FORMAT: &'static str = "%Y%m%dT%H%M%SZ";
@@ -18,18 +18,61 @@ pub mod types;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
-pub fn sign(mut req: Request<Bytes>, credential: Credentials) -> Result<Request<Bytes>, Error> {
-    // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
-    let creq: CanonicalRequest = TryFrom::try_from(&req)?;
+pub struct Signer<S> {
+    inner: S,
+    creds: Credentials,
+}
+pub struct SignerLayer {
+    creds: Credentials
+}
 
+impl<S> Layer<S> for SignerLayer {
+    type Service = Signer<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Signer {
+            inner,
+            creds: self.creds.clone()
+        }
+    }
+}
+
+impl<T, B> Service<Request<B>> for Signer<T>
+where
+    T: Service<Request<B>>,
+    B: AsRef<[u8]>,
+{
+    type Response = T::Response;
+    type Error = T::Error;
+    type Future = T::Future;
+
+    fn poll_ready(&mut self, cx: &mut task::Context) -> task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<B>) -> Self::Future {
+        let mut req = req;
+        sign(&mut req, &self.creds).unwrap();
+        // Call the inner service
+        self.inner.call(req)
+    }
+}
+
+pub fn sign<B>(req: &mut Request<B>, credential: &Credentials) -> Result<(), Error>
+where
+    B: AsRef<[u8]>,
+{
+    // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let region = req
         .get_region()
         .expect("Missing region, this is a bug.")
         .inner;
     let svc = req
         .get_service()
-        .expect("Missing region, this is a bug.")
+        .expect("Missing service, this is a bug.")
         .inner;
+    let creq = CanonicalRequest::from(req).unwrap();
+
     let token = &credential.security_token;
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
@@ -45,7 +88,6 @@ pub fn sign(mut req: Request<Bytes>, credential: Credentials) -> Result<Request<
     let authorization = build_authorization_header(&credential.access_key, creq, sts, &signature);
     let x_azn_date = date.fmt_aws();
 
-    // let mut req = req;
     let headers = req.headers_mut();
     headers.insert(header::AUTHORIZATION, authorization.parse()?);
     headers.insert(X_AMZ_DATE, x_azn_date.parse()?);
@@ -53,15 +95,15 @@ pub fn sign(mut req: Request<Bytes>, credential: Credentials) -> Result<Request<
         headers.insert(X_AMZ_SECURITY_TOKEN, token.parse()?);
     }
 
-    Ok(req)
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Service {
+pub struct SignedService {
     inner: &'static str,
 }
 
-impl Service {
+impl SignedService {
     pub fn new(inner: &'static str) -> Self {
         Self { inner }
     }
@@ -78,7 +120,7 @@ impl Region {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Default, Clone)]
 pub struct Credentials {
     #[serde(rename = "aws_access_key_id")]
     pub access_key: String,
@@ -99,19 +141,19 @@ impl Credentials {
 }
 
 pub trait RequestExt {
-    fn set_service(&mut self, svc: Service);
-    fn get_service(&self) -> Option<&Service>;
+    fn set_service(&mut self, svc: SignedService);
+    fn get_service(&self) -> Option<&SignedService>;
 
     fn set_region(&mut self, region: Region);
     fn get_region(&self) -> Option<&Region>;
 }
 
 impl<T> RequestExt for Request<T> {
-    fn set_service(&mut self, svc: Service) {
+    fn set_service(&mut self, svc: SignedService) {
         self.extensions_mut().insert(svc);
     }
-    fn get_service(&self) -> Option<&Service> {
-        self.extensions().get::<Service>()
+    fn get_service(&self) -> Option<&SignedService> {
+        self.extensions().get::<SignedService>()
     }
     fn set_region(&mut self, region: Region) {
         self.extensions_mut().insert(region);
@@ -146,8 +188,8 @@ mod tests {
 
         // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
         let s = read!(req: "get-vanilla-query-order-key-case")?;
-        let req = parse_request(s.as_bytes())?;
-        let creq: CanonicalRequest = TryFrom::try_from(req)?;
+        let mut req = parse_request(s.as_bytes())?;
+        let creq = CanonicalRequest::from(&mut req)?;
 
         let actual = format!("{}", creq);
         let expected = read!(creq: "get-vanilla-query-order-key-case")?;
@@ -186,8 +228,8 @@ mod tests {
     #[test]
     fn test_build_authorization_header() -> Result<(), Error> {
         let s = read!(req: "get-vanilla-query-order-key-case")?;
-        let req = parse_request(s.as_bytes())?;
-        let creq: CanonicalRequest = TryFrom::try_from(req)?;
+        let mut req = parse_request(s.as_bytes())?;
+        let creq = CanonicalRequest::from(&mut req)?;
 
         let date = NaiveDateTime::parse_from_str("20150830T123600Z", DATE_FORMAT).unwrap();
         let date = DateTime::<Utc>::from_utc(date, Utc);
@@ -312,7 +354,7 @@ mod tests {
     #[test]
     fn parse_signed_request() -> Result<(), Error> {
         let req = read!(sreq: "post-header-key-case")?;
-        let _: Request<()> = parse_request(req.as_bytes())?;
+        let _: Request<_> = parse_request(req.as_bytes())?;
         Ok(())
     }
 
@@ -333,7 +375,7 @@ mod tests {
         Ok(())
     }
 
-    fn parse_request(s: &[u8]) -> Result<Request<()>, Error> {
+    fn parse_request(s: &[u8]) -> Result<Request<bytes::Bytes>, Error> {
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut req = httparse::Request::new(&mut headers);
         let _ = req.parse(s).unwrap();
@@ -362,7 +404,7 @@ mod tests {
             }
         }
 
-        let req = builder.body(())?;
+        let req = builder.body(bytes::Bytes::new())?;
         Ok(req)
     }
 }
