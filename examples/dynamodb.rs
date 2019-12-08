@@ -11,7 +11,7 @@ use std::convert::TryFrom;
 use tower::{Service, builder::ServiceBuilder};
 
 use sigv4::{Credentials, Region, RequestExt, SignedService, X_AMZ_TARGET};
-use sigv4::service::{SignLayer, Sign, ConvertBodyLayer, ConvertBody};
+use sigv4::service::{SignAndPrepareLayer, SignAndPrepare};
 
 fn load_credentials() -> Result<Credentials, Error> {
     let access = std::env::var("AWS_ACCESS_KEY_ID")?;
@@ -206,7 +206,7 @@ impl IntoRequest for PutItemRequest {
 }
 
 struct AWSClient {
-    svc: Sign<ConvertBody<Client<hyper_tls::HttpsConnector<HttpConnector>, Body>>>,
+    svc: SignAndPrepare<Client<hyper_tls::HttpsConnector<HttpConnector>, Body>>,
     region: &'static str,
 }
 
@@ -217,8 +217,7 @@ impl AWSClient {
         let inner: Client<_, hyper::Body> = Client::builder().build(https);
 
         let svc = ServiceBuilder::new()
-            .layer(SignLayer { credentials })
-            .layer(ConvertBodyLayer)
+            .layer(SignAndPrepareLayer { credentials })
             .service(inner);
             
         Self {

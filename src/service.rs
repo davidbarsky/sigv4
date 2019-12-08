@@ -3,29 +3,29 @@ use http::Request;
 use std::task;
 use crate::{Credentials, sign};
 
-pub struct Sign<S> {
+pub struct SignAndPrepare<S> {
     inner: S,
     pub credentials: Credentials,
 }
 
-pub struct SignLayer {
+pub struct SignAndPrepareLayer {
     pub credentials: Credentials
 }
 
-impl<S> Layer<S> for SignLayer {
-    type Service = Sign<S>;
+impl<S> Layer<S> for SignAndPrepareLayer {
+    type Service = SignAndPrepare<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        Sign {
+        SignAndPrepare {
             inner,
             credentials: self.credentials.clone()
         }
     }
 }
 
-impl<T, B> Service<Request<B>> for Sign<T>
+impl<T, B> Service<Request<B>> for SignAndPrepare<T>
 where
-    T: Service<Request<B>>,
+    T: Service<Request<hyper::Body>>,
     B: AsRef<[u8]>,
 {
     type Response = T::Response;
@@ -39,45 +39,17 @@ where
     fn call(&mut self, req: Request<B>) -> Self::Future {
         let mut req = req;
         sign(&mut req, &self.credentials).unwrap();
+        let req = map_body(req);
         // Call the inner service
         self.inner.call(req)
     }
 }
 
-pub struct ConvertBodyLayer;
-
-impl<S> Layer<S> for ConvertBodyLayer {
-    type Service = ConvertBody<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        ConvertBody {
-            inner
-        }
-    }
-}
-
-pub struct ConvertBody<S> {
-    inner: S,
-}
-
-impl<S, B> Service<Request<B>> for ConvertBody<S>
+fn map_body<B>(req: Request<B>) -> Request<hyper::Body>
 where
-    S: Service<Request<hyper::Body>>,
     B: AsRef<[u8]>,
 {
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-    
-    fn poll_ready(&mut self, cx: &mut task::Context<'_>) -> task::Poll<Result<(), Self::Error>> { 
-        self.inner.poll_ready(cx)
-    }
-
-    fn call(&mut self, req: Request<B>) -> Self::Future { 
-        let (headers, body) = req.into_parts();
-        let body = hyper::Body::from(body.as_ref().to_vec());
-        let req = Request::from_parts(headers, body);
-
-        self.inner.call(req)
-    }
+    let (headers, body) = req.into_parts();
+    let body = hyper::Body::from(body.as_ref().to_vec());
+    Request::from_parts(headers, body)
 }
