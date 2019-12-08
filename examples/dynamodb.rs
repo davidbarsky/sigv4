@@ -10,7 +10,8 @@ use serde_json::json;
 use std::convert::TryFrom;
 use tower::{Service, builder::ServiceBuilder};
 
-use sigv4::{sign, SignerLayer, Signer, Credentials, Region, RequestExt, SignedService, X_AMZ_TARGET};
+use sigv4::{Credentials, Region, RequestExt, SignedService, X_AMZ_TARGET};
+use sigv4::service::{SignLayer, Sign, ConvertBodyLayer, ConvertBody};
 
 fn load_credentials() -> Result<Credentials, Error> {
     let access = std::env::var("AWS_ACCESS_KEY_ID")?;
@@ -26,7 +27,7 @@ fn load_credentials() -> Result<Credentials, Error> {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let region = Region { inner: "us-east-1" };
-    let client = AWSClient::new(region);
+    let mut client = AWSClient::new(region);
 
     let req = DescribeTableRequest {
         table_name: "Table",
@@ -205,7 +206,7 @@ impl IntoRequest for PutItemRequest {
 }
 
 struct AWSClient {
-    svc: Signer<Client<hyper_tls::HttpsConnector<HttpConnector>, Body>>,
+    svc: Sign<ConvertBody<Client<hyper_tls::HttpsConnector<HttpConnector>, Body>>>,
     region: &'static str,
 }
 
@@ -216,7 +217,8 @@ impl AWSClient {
         let inner: Client<_, hyper::Body> = Client::builder().build(https);
 
         let svc = ServiceBuilder::new()
-            .layer(SignerLayer { creds: credentials })
+            .layer(SignLayer { credentials })
+            .layer(ConvertBodyLayer)
             .service(inner);
             
         Self {
@@ -226,17 +228,8 @@ impl AWSClient {
     }
 
     async fn call<T: IntoRequest>(&mut self, req: T) -> Result<Response<Body>, Error> {
-        let mut req = req.into_request(Region { inner: self.region })?;
-        let credentials = load_credentials()?;
-        // sign(&mut req, &credentials)?;
-        let req = reconstruct(req);
+        let req = req.into_request(Region { inner: self.region })?;
         let res = self.svc.call(req).await?;
         Ok(res)
     }
-}
-
-fn reconstruct(req: Request<Bytes>) -> Request<Body> {
-    let (headers, body) = req.into_parts();
-    let body = Body::from(body);
-    Request::from_parts(headers, body)
 }

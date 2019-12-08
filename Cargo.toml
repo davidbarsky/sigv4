@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 http = "0.2"
 http-body = "0.3"
+hyper = { git = "https://github.com/hyperium/hyper", features = ["stream"] }
 ring = "0.16.9"
 serde = { version = "1", features = ["derive"] }
 serde_urlencoded = "0.5.1"

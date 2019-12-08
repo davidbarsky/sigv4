@@ -1,10 +1,8 @@
 use chrono::Utc;
 use eliza_error::Error;
 use http::{header, Request};
-use std::task;
 use serde::{Deserialize, Serialize};
 use std::str;
-use tower::{Service, layer::Layer};
 
 pub const HMAC_256: &'static str = "AWS4-HMAC-SHA256";
 pub const DATE_FORMAT: &'static str = "%Y%m%dT%H%M%SZ";
@@ -14,49 +12,10 @@ pub const X_AMZ_TARGET: &'static str = "x-amz-target";
 
 pub mod sign;
 pub mod types;
+pub mod service;
 
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
-
-pub struct Signer<S> {
-    inner: S,
-    creds: Credentials,
-}
-pub struct SignerLayer {
-    creds: Credentials
-}
-
-impl<S> Layer<S> for SignerLayer {
-    type Service = Signer<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        Signer {
-            inner,
-            creds: self.creds.clone()
-        }
-    }
-}
-
-impl<T, B> Service<Request<B>> for Signer<T>
-where
-    T: Service<Request<B>>,
-    B: AsRef<[u8]>,
-{
-    type Response = T::Response;
-    type Error = T::Error;
-    type Future = T::Future;
-
-    fn poll_ready(&mut self, cx: &mut task::Context) -> task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
-    fn call(&mut self, req: Request<B>) -> Self::Future {
-        let mut req = req;
-        sign(&mut req, &self.creds).unwrap();
-        // Call the inner service
-        self.inner.call(req)
-    }
-}
 
 pub fn sign<B>(req: &mut Request<B>, credential: &Credentials) -> Result<(), Error>
 where
