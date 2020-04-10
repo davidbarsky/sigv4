@@ -22,6 +22,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
+name = "aws-sigv4"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "chrono",
+ "eliza_error",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "http",
+ "http-body",
+ "httparse",
+ "hyper",
+ "hyper-tls",
+ "pretty_assertions",
+ "ring",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -782,30 +806,6 @@ checksum = "94f478ede9f64724c5d173d7bb56099ec3e2d9fc2774aac65d34b8b890405f41"
 dependencies = [
  "arc-swap",
  "libc",
-]
-
-[[package]]
-name = "sigv4"
-version = "0.0.1"
-dependencies = [
- "bytes",
- "chrono",
- "eliza_error",
- "futures-core",
- "futures-util",
- "hex",
- "http",
- "http-body",
- "httparse",
- "hyper",
- "hyper-tls",
- "pretty_assertions",
- "ring",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "tokio",
- "tower",
 ]
 
 [[package]]
