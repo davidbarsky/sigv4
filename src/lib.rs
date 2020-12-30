@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_headers() -> Result<(), Error> {
+    fn test_parse_headers() {
         let buf = b"Host:example.amazonaws.com\nX-Amz-Date:20150830T123600Z\n\nblah blah";
         let mut headers = [httparse::EMPTY_HEADER; 4];
         assert_eq!(
@@ -205,8 +205,6 @@ mod tests {
                 ][..]
             )))
         );
-
-        Ok(())
     }
 
     #[test]
