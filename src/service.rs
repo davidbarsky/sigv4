@@ -1,7 +1,7 @@
-use tower::{Service, layer::Layer};
+use crate::{sign, Credentials};
 use http::Request;
 use std::task;
-use crate::{Credentials, sign};
+use tower::{layer::Layer, Service};
 
 pub struct SignAndPrepare<S> {
     inner: S,
@@ -9,7 +9,7 @@ pub struct SignAndPrepare<S> {
 }
 
 pub struct SignAndPrepareLayer {
-    pub credentials: Credentials
+    pub credentials: Credentials,
 }
 
 impl<S> Layer<S> for SignAndPrepareLayer {
@@ -18,7 +18,7 @@ impl<S> Layer<S> for SignAndPrepareLayer {
     fn layer(&self, inner: S) -> Self::Service {
         SignAndPrepare {
             inner,
-            credentials: self.credentials.clone()
+            credentials: self.credentials.clone(),
         }
     }
 }
@@ -37,8 +37,10 @@ where
     }
 
     fn call(&mut self, req: Request<B>) -> Self::Future {
+        let region = req.get_region().expect("Missing region, this is a bug.");
+        let svc = req.get_service().expect("Missing service, this is a bug.");
         let mut req = req;
-        sign(&mut req, &self.credentials).unwrap();
+        sign(&mut req, &self.credentials, &region, &svc).unwrap();
         let req = map_body(req);
         // Call the inner service
         self.inner.call(req)

@@ -8,10 +8,12 @@ use http_body::Body as _;
 use hyper::{client::HttpConnector, Body, Client};
 use serde_json::json;
 use std::convert::TryFrom;
-use tower::{Service, builder::ServiceBuilder};
+use tower::{builder::ServiceBuilder, Service};
 
-use sigv4::{Credentials, Region, RequestExt, SignedService, X_AMZ_TARGET};
-use sigv4::service::{SignAndPrepareLayer, SignAndPrepare};
+use sigv4::{
+    service::{SignAndPrepare, SignAndPrepareLayer},
+    Credentials, Region, RequestExt, SignedService, X_AMZ_TARGET,
+};
 
 fn load_credentials() -> Result<Credentials, Error> {
     let access = std::env::var("AWS_ACCESS_KEY_ID")?;
@@ -219,7 +221,7 @@ impl AWSClient {
         let svc = ServiceBuilder::new()
             .layer(SignAndPrepareLayer { credentials })
             .service(inner);
-            
+
         Self {
             svc,
             region: region.inner,

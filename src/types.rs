@@ -1,7 +1,4 @@
-use crate::{
-    sign::encode_bytes_with_hex,
-    DATE_FORMAT, HMAC_256,
-};
+use crate::{sign::encode_bytes_with_hex, DATE_FORMAT, HMAC_256};
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use eliza_error::Error;
 use http::{header::HeaderName, HeaderMap, Method, Request};
@@ -9,7 +6,7 @@ use serde_urlencoded as qs;
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
-    convert::{TryFrom, AsRef},
+    convert::{AsRef, TryFrom},
     fmt,
 };
 
@@ -72,12 +69,12 @@ impl fmt::Display for CanonicalRequest {
             // a missing header is a bug, so we should panic.
             let value = &self.headers[&header.0];
             write!(f, "{}:", header.0.as_str())?;
-            write!(f, "{}\n", value.to_str().unwrap())?;
+            writeln!(f, "{}", value.to_str().unwrap())?;
         }
-        write!(f, "\n")?;
+        writeln!(f)?;
         // write out the signed headers
         write!(f, "{}", self.signed_headers.to_string())?;
-        write!(f, "\n")?;
+        writeln!(f)?;
         write!(f, "{}", self.payload_hash)?;
         Ok(())
     }

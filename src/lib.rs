@@ -4,32 +4,29 @@ use http::{header, Request};
 use serde::{Deserialize, Serialize};
 use std::str;
 
-pub const HMAC_256: &'static str = "AWS4-HMAC-SHA256";
-pub const DATE_FORMAT: &'static str = "%Y%m%dT%H%M%SZ";
-pub const X_AMZ_SECURITY_TOKEN: &'static str = "x-amz-security-token";
-pub const X_AMZ_DATE: &'static str = "x-amz-date";
-pub const X_AMZ_TARGET: &'static str = "x-amz-target";
+pub const HMAC_256: &str = "AWS4-HMAC-SHA256";
+pub const DATE_FORMAT: &str = "%Y%m%dT%H%M%SZ";
+pub const X_AMZ_SECURITY_TOKEN: &str = "x-amz-security-token";
+pub const X_AMZ_DATE: &str = "x-amz-date";
+pub const X_AMZ_TARGET: &str = "x-amz-target";
 
+// pub mod service;
 pub mod sign;
 pub mod types;
-pub mod service;
 
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
-pub fn sign<B>(req: &mut Request<B>, credential: &Credentials) -> Result<(), Error>
+pub fn sign<B>(
+    req: &mut Request<B>,
+    credential: &Credentials,
+    region: &str,
+    svc: &str,
+) -> Result<(), Error>
 where
     B: AsRef<[u8]>,
 {
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
-    let region = req
-        .get_region()
-        .expect("Missing region, this is a bug.")
-        .inner;
-    let svc = req
-        .get_service()
-        .expect("Missing service, this is a bug.")
-        .inner;
     let creq = CanonicalRequest::from(req).unwrap();
 
     let token = &credential.security_token;
@@ -57,28 +54,6 @@ where
     Ok(())
 }
 
-#[derive(Debug, PartialEq)]
-pub struct SignedService {
-    inner: &'static str,
-}
-
-impl SignedService {
-    pub fn new(inner: &'static str) -> Self {
-        Self { inner }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Region {
-    pub inner: &'static str,
-}
-
-impl Region {
-    pub fn new(inner: &'static str) -> Self {
-        Self { inner }
-    }
-}
-
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default, Clone)]
 pub struct Credentials {
     #[serde(rename = "aws_access_key_id")]
@@ -96,29 +71,6 @@ impl Credentials {
             secret_key: secret_key.to_string(),
             security_token: security_token.map(|token| token.to_string()),
         }
-    }
-}
-
-pub trait RequestExt {
-    fn set_service(&mut self, svc: SignedService);
-    fn get_service(&self) -> Option<&SignedService>;
-
-    fn set_region(&mut self, region: Region);
-    fn get_region(&self) -> Option<&Region>;
-}
-
-impl<T> RequestExt for Request<T> {
-    fn set_service(&mut self, svc: SignedService) {
-        self.extensions_mut().insert(svc);
-    }
-    fn get_service(&self) -> Option<&SignedService> {
-        self.extensions().get::<SignedService>()
-    }
-    fn set_region(&mut self, region: Region) {
-        self.extensions_mut().insert(region);
-    }
-    fn get_region(&self) -> Option<&Region> {
-        self.extensions().get::<Region>()
     }
 }
 
