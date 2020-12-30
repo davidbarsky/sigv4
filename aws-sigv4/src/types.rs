@@ -1,6 +1,5 @@
-use crate::{sign::encode_bytes_with_hex, DATE_FORMAT, HMAC_256};
+use crate::{sign::encode_bytes_with_hex, DATE_FORMAT, HMAC_256, Error};
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
-use eliza_error::Error;
 use http::{header::HeaderName, HeaderMap, Method, Request};
 use serde_urlencoded as qs;
 use std::{
@@ -29,9 +28,13 @@ impl CanonicalRequest {
     where
         B: AsRef<[u8]>,
     {
-        let mut creq = CanonicalRequest::default();
-        creq.method = req.method().clone();
-        creq.path = req.uri().path_and_query().unwrap().path().to_string();
+        let mut creq = CanonicalRequest {
+            method: req.method().clone(),
+            path: req.uri().path().to_string(),
+            ..Default::default()
+        };
+        // creq.method = req.method().clone();
+        // creq.path = req.uri().path_and_query().unwrap().path().to_string();
 
         if let Some(pq) = req.uri().path_and_query() {
             if let Some(path) = pq.query() {
@@ -140,7 +143,7 @@ impl<'a> AsSigV4 for Scope<'a> {
 impl<'a> TryFrom<&'a str> for Scope<'a> {
     type Error = Error;
     fn try_from(s: &'a str) -> Result<Scope<'a>, Self::Error> {
-        let mut scopes = s.split("/");
+        let mut scopes = s.split('/');
         let date = Date::<Utc>::parse_aws(scopes.next().expect("missing date"))?;
         let region = scopes.next().expect("missing date");
         let service = scopes.next().expect("missing date");

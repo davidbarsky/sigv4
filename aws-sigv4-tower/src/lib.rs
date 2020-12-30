@@ -1,7 +1,12 @@
-use crate::{sign, Credentials};
-use http::Request;
+use aws_sigv4::{sign, Credentials};
 use std::task;
 use tower::{layer::Layer, Service};
+
+pub struct Request<'a, B> {
+    pub inner: http::Request<B>,
+    pub region: &'a str,
+    pub service: &'a str,
+}
 
 pub struct SignAndPrepare<S> {
     inner: S,
@@ -23,9 +28,9 @@ impl<S> Layer<S> for SignAndPrepareLayer {
     }
 }
 
-impl<T, B> Service<Request<B>> for SignAndPrepare<T>
+impl<'a, T, B> Service<Request<'a, B>> for SignAndPrepare<T>
 where
-    T: Service<Request<hyper::Body>>,
+    T: Service<http::Request<hyper::Body>>,
     B: AsRef<[u8]>,
 {
     type Response = T::Response;
@@ -36,22 +41,28 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<B>) -> Self::Future {
-        let region = req.get_region().expect("Missing region, this is a bug.");
-        let svc = req.get_service().expect("Missing service, this is a bug.");
-        let mut req = req;
-        sign(&mut req, &self.credentials, &region, &svc).unwrap();
+    fn call(&mut self, req: Request<'a, B>) -> Self::Future {
+        let Request {
+            inner,
+            region,
+            service,
+        } = req;
+
+        let mut req: http::Request<B> = inner;
+        sign(&mut req, &self.credentials, &region, &service).unwrap();
+
         let req = map_body(req);
+
         // Call the inner service
         self.inner.call(req)
     }
 }
 
-fn map_body<B>(req: Request<B>) -> Request<hyper::Body>
+fn map_body<B>(req: http::Request<B>) -> http::Request<hyper::Body>
 where
     B: AsRef<[u8]>,
 {
     let (headers, body) = req.into_parts();
     let body = hyper::Body::from(body.as_ref().to_vec());
-    Request::from_parts(headers, body)
+    http::Request::from_parts(headers, body)
 }

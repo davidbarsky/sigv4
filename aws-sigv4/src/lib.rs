@@ -1,6 +1,5 @@
 use chrono::Utc;
-use eliza_error::Error;
-use http::{header, Request};
+use http::header;
 use serde::{Deserialize, Serialize};
 use std::str;
 
@@ -10,15 +9,16 @@ pub const X_AMZ_SECURITY_TOKEN: &str = "x-amz-security-token";
 pub const X_AMZ_DATE: &str = "x-amz-date";
 pub const X_AMZ_TARGET: &str = "x-amz-target";
 
-// pub mod service;
 pub mod sign;
 pub mod types;
+
+type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
 pub fn sign<B>(
-    req: &mut Request<B>,
+    req: &mut http::Request<B>,
     credential: &Credentials,
     region: &str,
     svc: &str,
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn test_signature_calculation() -> Result<(), Error> {
         let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-        let creq = std::fs::read_to_string(format!("aws-sig-v4-test-suite/iam.creq"))?;
+        let creq = std::fs::read_to_string("aws-sig-v4-test-suite/iam.creq")?;
         let date = DateTime::parse_aws("20150830T123600Z")?;
 
         let derived_key = generate_signing_key(secret, date.date(), "us-east-1", "iam");
@@ -308,7 +308,7 @@ mod tests {
         }
         for header in req.headers {
             let name = header.name.to_lowercase();
-            if name != "" {
+            if !name.is_empty() {
                 builder = builder.header(&name, header.value);
             }
         }
