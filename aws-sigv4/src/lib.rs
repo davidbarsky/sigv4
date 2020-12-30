@@ -76,17 +76,15 @@ impl Credentials {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
-
     use crate::{
         assert_req_eq, build_authorization_header, read,
         sign::{calculate_signature, encode_with_hex, generate_signing_key},
         types::{AsSigV4, CanonicalRequest, DateExt, DateTimeExt, Scope, StringToSign},
-        DATE_FORMAT,
+        Error, DATE_FORMAT,
     };
     use chrono::{Date, DateTime, NaiveDateTime, Utc};
-    use eliza_error::Error;
     use http::{Method, Request, Uri, Version};
+    use pretty_assertions::assert_eq;
     use std::{convert::TryFrom, str::FromStr};
 
     #[test]
@@ -248,7 +246,7 @@ mod tests {
     #[test]
     fn test_signature_calculation() -> Result<(), Error> {
         let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-        let creq = std::fs::read_to_string("aws-sig-v4-test-suite/iam.creq")?;
+        let creq = std::fs::read_to_string("../aws-sig-v4-test-suite/iam.creq")?;
         let date = DateTime::parse_aws("20150830T123600Z")?;
 
         let derived_key = generate_signing_key(secret, date.date(), "us-east-1", "iam");
@@ -346,22 +344,25 @@ macro_rules! assert_req_eq {
 #[macro_export]
 macro_rules! read {
     (req: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.req", $case, $case))
+        std::fs::read_to_string(format!("../aws-sig-v4-test-suite/{}/{}.req", $case, $case))
     };
 
     (creq: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.creq", $case, $case))
+        std::fs::read_to_string(format!("../aws-sig-v4-test-suite/{}/{}.creq", $case, $case))
     };
 
     (sreq: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sreq", $case, $case))
+        std::fs::read_to_string(format!("../aws-sig-v4-test-suite/{}/{}.sreq", $case, $case))
     };
 
     (sts: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sts", $case, $case))
+        std::fs::read_to_string(format!("../aws-sig-v4-test-suite/{}/{}.sts", $case, $case))
     };
 
     (authz: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.authz", $case, $case))
+        std::fs::read_to_string(format!(
+            "../aws-sig-v4-test-suite/{}/{}.authz",
+            $case, $case
+        ))
     };
 }
