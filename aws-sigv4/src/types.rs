@@ -1,4 +1,4 @@
-use crate::{sign::encode_bytes_with_hex, DATE_FORMAT, HMAC_256, Error};
+use crate::{sign::encode_bytes_with_hex, Error, DATE_FORMAT, HMAC_256};
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use http::{header::HeaderName, HeaderMap, Method, Request};
 use serde_urlencoded as qs;
@@ -33,14 +33,10 @@ impl CanonicalRequest {
             path: req.uri().path().to_string(),
             ..Default::default()
         };
-        // creq.method = req.method().clone();
-        // creq.path = req.uri().path_and_query().unwrap().path().to_string();
 
-        if let Some(pq) = req.uri().path_and_query() {
-            if let Some(path) = pq.query() {
-                let params: BTreeMap<String, String> = qs::from_str(path)?;
-                creq.params = qs::to_string(params)?;
-            }
+        if let Some(path) = req.uri().query() {
+            let params: BTreeMap<String, String> = qs::from_str(path)?;
+            creq.params = qs::to_string(params)?;
         }
 
         let mut headers = BTreeSet::new();

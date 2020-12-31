@@ -29,8 +29,6 @@ where
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let creq = CanonicalRequest::from(req).unwrap();
 
-    let token = &credential.security_token;
-
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
     let date = Utc::now();
     let encoded_creq = &encode_with_hex(creq.fmt());
@@ -47,7 +45,7 @@ where
     let headers = req.headers_mut();
     headers.insert(header::AUTHORIZATION, authorization.parse()?);
     headers.insert(X_AMZ_DATE, x_azn_date.parse()?);
-    if let Some(token) = token {
+    if let Some(token) = &credential.security_token {
         headers.insert(X_AMZ_SECURITY_TOKEN, token.parse()?);
     }
 
