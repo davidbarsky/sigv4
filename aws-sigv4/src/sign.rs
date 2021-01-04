@@ -22,7 +22,7 @@ pub fn encode_with_hex(s: String) -> String {
 /// HashedPayload = Lowercase(HexEncode(Hash(requestPayload)))
 pub fn encode_bytes_with_hex<B>(bytes: B) -> String
 where
-    B: AsRef<[u8]>
+    B: AsRef<[u8]>,
 {
     let digest: Digest = digest::digest(&digest::SHA256, bytes.as_ref());
     // no need to lower-case as in step six, as hex::encode

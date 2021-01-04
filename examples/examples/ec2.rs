@@ -1,10 +1,10 @@
+use aws_sigv4::{sign, Credentials};
 use bytes::Bytes;
-use eliza_error::Error;
 use http::{header, Method, Request, Uri, Version};
 use http_body::Body as _;
 use hyper::{Body, Client};
 
-use sigv4::{sign, Credentials, Region, RequestExt, SignedService};
+type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 fn load_credentials() -> Result<Credentials, Error> {
     let access = std::env::var("AWS_ACCESS_KEY_ID")?;
@@ -33,11 +33,9 @@ async fn main() -> Result<(), Error> {
     headers.insert(header::HOST, "ec2.amazonaws.com".parse()?);
 
     let mut req = builder.body(Bytes::new())?;
-    req.set_service(SignedService::new("ec2"));
-    req.set_region(Region::new("us-east-1"));
     let credentials = load_credentials()?;
 
-    sign(&mut req, &credentials)?;
+    sign(&mut req, &credentials, "us-east-1", "ec2")?;
     let req = reconstruct(req);
     let mut res = client.request(req).await?;
     let mut body = vec![];

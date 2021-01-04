@@ -1,0 +1,22 @@
+[package]
+name = "aws-sigv4-tower"
+version = "0.0.1"
+authors = ["David Barsky <me@davidbarsky.com>"]
+edition = "2018"
+exclude = [
+    "aws-sig-v4-test-suite/*"
+]
+license = "MIT OR Apache-2.0"
+description = "An AWS SigV4 request signer."
+repository = "https://github.com/davidbarsky/sigv4"
+homepage = "https://github.com/davidbarsky/sigv4"
+documentation = "https://docs.rsx/aws-sigv4"
+
+[dependencies]
+http = "0.2"
+http-body = "0.4"
+aws-sigv4 = { path = "../aws-sigv4" }
+tokio = { version = "1.0", features = ["full"] }
+hyper = { version = "0.14", features = ["http1", "client", "runtime"] }
+hyper-tls = "0.5"
+tower = { version = "0.4", git = "https://github.com/tower-rs/tower" }

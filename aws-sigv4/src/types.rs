@@ -1,15 +1,11 @@
-use crate::{
-    sign::encode_bytes_with_hex,
-    DATE_FORMAT, HMAC_256,
-};
+use crate::{sign::encode_bytes_with_hex, Error, DATE_FORMAT, HMAC_256};
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
-use eliza_error::Error;
 use http::{header::HeaderName, HeaderMap, Method, Request};
 use serde_urlencoded as qs;
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
-    convert::{TryFrom, AsRef},
+    convert::{AsRef, TryFrom},
     fmt,
 };
 
@@ -32,15 +28,15 @@ impl CanonicalRequest {
     where
         B: AsRef<[u8]>,
     {
-        let mut creq = CanonicalRequest::default();
-        creq.method = req.method().clone();
-        creq.path = req.uri().path_and_query().unwrap().path().to_string();
+        let mut creq = CanonicalRequest {
+            method: req.method().clone(),
+            path: req.uri().path().to_string(),
+            ..Default::default()
+        };
 
-        if let Some(pq) = req.uri().path_and_query() {
-            if let Some(path) = pq.query() {
-                let params: BTreeMap<String, String> = qs::from_str(path)?;
-                creq.params = qs::to_string(params)?;
-            }
+        if let Some(path) = req.uri().query() {
+            let params: BTreeMap<String, String> = qs::from_str(path)?;
+            creq.params = qs::to_string(params)?;
         }
 
         let mut headers = BTreeSet::new();
@@ -72,12 +68,12 @@ impl fmt::Display for CanonicalRequest {
             // a missing header is a bug, so we should panic.
             let value = &self.headers[&header.0];
             write!(f, "{}:", header.0.as_str())?;
-            write!(f, "{}\n", value.to_str().unwrap())?;
+            writeln!(f, "{}", value.to_str().unwrap())?;
         }
-        write!(f, "\n")?;
+        writeln!(f)?;
         // write out the signed headers
         write!(f, "{}", self.signed_headers.to_string())?;
-        write!(f, "\n")?;
+        writeln!(f)?;
         write!(f, "{}", self.payload_hash)?;
         Ok(())
     }
@@ -143,7 +139,7 @@ impl<'a> AsSigV4 for Scope<'a> {
 impl<'a> TryFrom<&'a str> for Scope<'a> {
     type Error = Error;
     fn try_from(s: &'a str) -> Result<Scope<'a>, Self::Error> {
-        let mut scopes = s.split("/");
+        let mut scopes = s.split('/');
         let date = Date::<Utc>::parse_aws(scopes.next().expect("missing date"))?;
         let region = scopes.next().expect("missing date");
         let service = scopes.next().expect("missing date");

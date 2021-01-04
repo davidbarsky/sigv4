@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use eliza_error::Error;
 use http::{
     header::{CONTENT_TYPE, HOST},
     Method, Request, Response, Uri, Version,
@@ -8,10 +7,12 @@ use http_body::Body as _;
 use hyper::{client::HttpConnector, Body, Client};
 use serde_json::json;
 use std::convert::TryFrom;
-use tower::{Service, builder::ServiceBuilder};
+use tower::{builder::ServiceBuilder, Service};
 
-use sigv4::{Credentials, Region, RequestExt, SignedService, X_AMZ_TARGET};
-use sigv4::service::{SignAndPrepareLayer, SignAndPrepare};
+use aws_sigv4::{Credentials, X_AMZ_TARGET};
+use aws_sigv4_tower::{SignAndPrepare, SignAndPrepareLayer};
+
+type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 fn load_credentials() -> Result<Credentials, Error> {
     let access = std::env::var("AWS_ACCESS_KEY_ID")?;
@@ -26,8 +27,7 @@ fn load_credentials() -> Result<Credentials, Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let region = Region { inner: "us-east-1" };
-    let mut client = AWSClient::new(region);
+    let mut client = AWSClient::new("us-east-1");
 
     let req = DescribeTableRequest {
         table_name: "Table",
@@ -84,12 +84,12 @@ trait IntoRequest {
     where
         Self: Sized;
 
-    fn into_request(self, region: Region) -> Result<Request<Bytes>, Error>
+    fn into_request(self, region: &str) -> Result<aws_sigv4_tower::Request<Bytes>, Error>
     where
         Self: Sized,
     {
-        let uri = format!("https://dynamodb.{}.amazonaws.com/", region.inner);
-        let host = format!("dynamodb.{}.amazonaws.com", region.inner);
+        let uri = format!("https://dynamodb.{}.amazonaws.com/", region);
+        let host = format!("dynamodb.{}.amazonaws.com", region);
         let uri = Uri::try_from(uri)?;
         let operation_name = format!("DynamoDB_20120810.{}", Self::OPERATION_NAME);
 
@@ -104,9 +104,14 @@ trait IntoRequest {
         headers.insert(X_AMZ_TARGET, operation_name.parse()?);
 
         let params = serde_json::to_vec(&self.params())?;
-        let mut req = builder.body(Bytes::from(params))?;
-        req.set_service(SignedService::new("dynamodb"));
-        req.set_region(region);
+        let req = builder.body(Bytes::from(params))?;
+
+        let req = aws_sigv4_tower::Request {
+            inner: req,
+            region,
+            service: "dynamodb",
+        };
+
         Ok(req)
     }
 }
@@ -207,11 +212,11 @@ impl IntoRequest for PutItemRequest {
 
 struct AWSClient {
     svc: SignAndPrepare<Client<hyper_tls::HttpsConnector<HttpConnector>, Body>>,
-    region: &'static str,
+    region: String,
 }
 
 impl AWSClient {
-    fn new(region: Region) -> Self {
+    fn new(region: &str) -> Self {
         let credentials = load_credentials().unwrap();
         let https = hyper_tls::HttpsConnector::new();
         let inner: Client<_, hyper::Body> = Client::builder().build(https);
@@ -219,15 +224,15 @@ impl AWSClient {
         let svc = ServiceBuilder::new()
             .layer(SignAndPrepareLayer { credentials })
             .service(inner);
-            
+
         Self {
             svc,
-            region: region.inner,
+            region: region.to_string(),
         }
     }
 
     async fn call<T: IntoRequest>(&mut self, req: T) -> Result<Response<Body>, Error> {
-        let req = req.into_request(Region { inner: self.region })?;
+        let req = req.into_request(&self.region)?;
         let res = self.svc.call(req).await?;
         Ok(res)
     }

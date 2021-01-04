@@ -1,38 +1,33 @@
 use chrono::Utc;
-use eliza_error::Error;
-use http::{header, Request};
+use http::header;
 use serde::{Deserialize, Serialize};
 use std::str;
 
-pub const HMAC_256: &'static str = "AWS4-HMAC-SHA256";
-pub const DATE_FORMAT: &'static str = "%Y%m%dT%H%M%SZ";
-pub const X_AMZ_SECURITY_TOKEN: &'static str = "x-amz-security-token";
-pub const X_AMZ_DATE: &'static str = "x-amz-date";
-pub const X_AMZ_TARGET: &'static str = "x-amz-target";
+pub const HMAC_256: &str = "AWS4-HMAC-SHA256";
+pub const DATE_FORMAT: &str = "%Y%m%dT%H%M%SZ";
+pub const X_AMZ_SECURITY_TOKEN: &str = "x-amz-security-token";
+pub const X_AMZ_DATE: &str = "x-amz-date";
+pub const X_AMZ_TARGET: &str = "x-amz-target";
 
 pub mod sign;
 pub mod types;
-pub mod service;
+
+type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
-pub fn sign<B>(req: &mut Request<B>, credential: &Credentials) -> Result<(), Error>
+pub fn sign<B>(
+    req: &mut http::Request<B>,
+    credential: &Credentials,
+    region: &str,
+    svc: &str,
+) -> Result<(), Error>
 where
     B: AsRef<[u8]>,
 {
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
-    let region = req
-        .get_region()
-        .expect("Missing region, this is a bug.")
-        .inner;
-    let svc = req
-        .get_service()
-        .expect("Missing service, this is a bug.")
-        .inner;
     let creq = CanonicalRequest::from(req).unwrap();
-
-    let token = &credential.security_token;
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
     let date = Utc::now();
@@ -50,33 +45,11 @@ where
     let headers = req.headers_mut();
     headers.insert(header::AUTHORIZATION, authorization.parse()?);
     headers.insert(X_AMZ_DATE, x_azn_date.parse()?);
-    if let Some(token) = token {
+    if let Some(token) = &credential.security_token {
         headers.insert(X_AMZ_SECURITY_TOKEN, token.parse()?);
     }
 
     Ok(())
-}
-
-#[derive(Debug, PartialEq)]
-pub struct SignedService {
-    inner: &'static str,
-}
-
-impl SignedService {
-    pub fn new(inner: &'static str) -> Self {
-        Self { inner }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Region {
-    pub inner: &'static str,
-}
-
-impl Region {
-    pub fn new(inner: &'static str) -> Self {
-        Self { inner }
-    }
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default, Clone)]
@@ -99,42 +72,17 @@ impl Credentials {
     }
 }
 
-pub trait RequestExt {
-    fn set_service(&mut self, svc: SignedService);
-    fn get_service(&self) -> Option<&SignedService>;
-
-    fn set_region(&mut self, region: Region);
-    fn get_region(&self) -> Option<&Region>;
-}
-
-impl<T> RequestExt for Request<T> {
-    fn set_service(&mut self, svc: SignedService) {
-        self.extensions_mut().insert(svc);
-    }
-    fn get_service(&self) -> Option<&SignedService> {
-        self.extensions().get::<SignedService>()
-    }
-    fn set_region(&mut self, region: Region) {
-        self.extensions_mut().insert(region);
-    }
-    fn get_region(&self) -> Option<&Region> {
-        self.extensions().get::<Region>()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
-
     use crate::{
         assert_req_eq, build_authorization_header, read,
         sign::{calculate_signature, encode_with_hex, generate_signing_key},
         types::{AsSigV4, CanonicalRequest, DateExt, DateTimeExt, Scope, StringToSign},
-        DATE_FORMAT,
+        Error, DATE_FORMAT,
     };
     use chrono::{Date, DateTime, NaiveDateTime, Utc};
-    use eliza_error::Error;
     use http::{Method, Request, Uri, Version};
+    use pretty_assertions::assert_eq;
     use std::{convert::TryFrom, str::FromStr};
 
     #[test]
@@ -234,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_headers() -> Result<(), Error> {
+    fn test_parse_headers() {
         let buf = b"Host:example.amazonaws.com\nX-Amz-Date:20150830T123600Z\n\nblah blah";
         let mut headers = [httparse::EMPTY_HEADER; 4];
         assert_eq!(
@@ -253,8 +201,6 @@ mod tests {
                 ][..]
             )))
         );
-
-        Ok(())
     }
 
     #[test]
@@ -298,7 +244,7 @@ mod tests {
     #[test]
     fn test_signature_calculation() -> Result<(), Error> {
         let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-        let creq = std::fs::read_to_string(format!("aws-sig-v4-test-suite/iam.creq"))?;
+        let creq = std::fs::read_to_string("../aws-sig-v4-test-suite/iam.creq")?;
         let date = DateTime::parse_aws("20150830T123600Z")?;
 
         let derived_key = generate_signing_key(secret, date.date(), "us-east-1", "iam");
@@ -358,7 +304,7 @@ mod tests {
         }
         for header in req.headers {
             let name = header.name.to_lowercase();
-            if name != "" {
+            if !name.is_empty() {
                 builder = builder.header(&name, header.value);
             }
         }
@@ -396,22 +342,25 @@ macro_rules! assert_req_eq {
 #[macro_export]
 macro_rules! read {
     (req: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.req", $case, $case))
+        std::fs::read_to_string(format!("../aws-sig-v4-test-suite/{}/{}.req", $case, $case))
     };
 
     (creq: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.creq", $case, $case))
+        std::fs::read_to_string(format!("../aws-sig-v4-test-suite/{}/{}.creq", $case, $case))
     };
 
     (sreq: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sreq", $case, $case))
+        std::fs::read_to_string(format!("../aws-sig-v4-test-suite/{}/{}.sreq", $case, $case))
     };
 
     (sts: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.sts", $case, $case))
+        std::fs::read_to_string(format!("../aws-sig-v4-test-suite/{}/{}.sts", $case, $case))
     };
 
     (authz: $case:tt) => {
-        std::fs::read_to_string(format!("aws-sig-v4-test-suite/{}/{}.authz", $case, $case))
+        std::fs::read_to_string(format!(
+            "../aws-sig-v4-test-suite/{}/{}.authz",
+            $case, $case
+        ))
     };
 }
