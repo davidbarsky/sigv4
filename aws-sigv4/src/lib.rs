@@ -27,7 +27,7 @@ pub fn sign<B>(
 where
     B: AsRef<[u8]>,
 {
-    for (header_name, header_value) in sign_core(&req, credential, region, svc, Utc::now()) {
+    for (header_name, header_value) in sign_core(&req, req.body(), credential, region, svc, Utc::now()) {
         req.headers_mut()
             .append(header_name.header_name(), header_value.parse()?);
     }
@@ -53,16 +53,14 @@ impl SignatureKey {
 
 pub fn sign_core<B>(
     req: &http::Request<B>,
+    payload: impl AsRef<[u8]>,
     credential: &Credentials,
     region: &str,
     svc: &str,
     date: DateTime<Utc>,
-) -> Vec<(SignatureKey, String)>
-where
-    B: AsRef<[u8]>,
-{
+) -> Vec<(SignatureKey, String)> {
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
-    let creq = CanonicalRequest::from(req).unwrap();
+    let creq = CanonicalRequest::from_req_payload(req, payload).unwrap();
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
     let encoded_creq = &encode_with_hex(creq.fmt());
