@@ -16,8 +16,8 @@ type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 use http::header::HeaderName;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
-use std::time::{Instant, UNIX_EPOCH, SystemTime};
 
 pub fn sign<B>(
     req: &mut http::Request<B>,
@@ -25,10 +25,12 @@ pub fn sign<B>(
     region: &str,
     svc: &str,
 ) -> Result<(), Error>
-    where
-        B: AsRef<[u8]>,
+where
+    B: AsRef<[u8]>,
 {
-    for (header_name, header_value) in sign_core(&req, req.body(), credential, region, svc, SystemTime::now()) {
+    for (header_name, header_value) in
+        sign_core(&req, req.body(), credential, region, svc, SystemTime::now())
+    {
         req.headers_mut()
             .append(header_name.header_name(), header_value.parse()?);
     }
