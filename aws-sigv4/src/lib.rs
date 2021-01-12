@@ -17,6 +17,7 @@ type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 use http::header::HeaderName;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
+use std::time::{Instant, UNIX_EPOCH, SystemTime};
 
 pub fn sign<B>(
     req: &mut http::Request<B>,
@@ -24,10 +25,10 @@ pub fn sign<B>(
     region: &str,
     svc: &str,
 ) -> Result<(), Error>
-where
-    B: AsRef<[u8]>,
+    where
+        B: AsRef<[u8]>,
 {
-    for (header_name, header_value) in sign_core(&req, req.body(), credential, region, svc, Utc::now()) {
+    for (header_name, header_value) in sign_core(&req, req.body(), credential, region, svc, SystemTime::now()) {
         req.headers_mut()
             .append(header_name.header_name(), header_value.parse()?);
     }
@@ -35,6 +36,10 @@ where
     Ok(())
 }
 
+/// SignatureKey is the key half of the key-value pair of a generated signature
+///
+/// When signing with SigV4, the algorithm produces multiple components of a signature that MUST
+/// be applied to a request.
 pub enum SignatureKey {
     Authorization,
     AmzDate,
@@ -57,13 +62,14 @@ pub fn sign_core<B>(
     credential: &Credentials,
     region: &str,
     svc: &str,
-    date: DateTime<Utc>,
+    date: SystemTime,
 ) -> Vec<(SignatureKey, String)> {
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let creq = CanonicalRequest::from_req_payload(req, payload).unwrap();
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
     let encoded_creq = &encode_with_hex(creq.fmt());
+    let date = DateTime::<Utc>::from(date);
     let sts = StringToSign::new(date, region, svc, encoded_creq);
 
     // Step 3: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-calculate-signature.html
