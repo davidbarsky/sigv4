@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use http::header;
 use serde::{Deserialize, Serialize};
 use std::str;
@@ -14,6 +14,7 @@ pub mod types;
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+use http::header::HeaderName;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
@@ -26,11 +27,44 @@ pub fn sign<B>(
 where
     B: AsRef<[u8]>,
 {
+    for (header_name, header_value) in sign_core(&req, credential, region, svc, Utc::now()) {
+        req.headers_mut()
+            .append(header_name.header_name(), header_value.parse()?);
+    }
+
+    Ok(())
+}
+
+pub enum SignatureKey {
+    Authorization,
+    AmzDate,
+    AmzSecurityToken,
+}
+
+impl SignatureKey {
+    pub fn header_name(&self) -> HeaderName {
+        match self {
+            SignatureKey::Authorization => header::AUTHORIZATION,
+            SignatureKey::AmzDate => HeaderName::from_static(X_AMZ_DATE),
+            SignatureKey::AmzSecurityToken => HeaderName::from_static(X_AMZ_SECURITY_TOKEN),
+        }
+    }
+}
+
+pub fn sign_core<B>(
+    req: &http::Request<B>,
+    credential: &Credentials,
+    region: &str,
+    svc: &str,
+    date: DateTime<Utc>,
+) -> Vec<(SignatureKey, String)>
+where
+    B: AsRef<[u8]>,
+{
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let creq = CanonicalRequest::from(req).unwrap();
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
-    let date = Utc::now();
     let encoded_creq = &encode_with_hex(creq.fmt());
     let sts = StringToSign::new(date, region, svc, encoded_creq);
 
@@ -42,14 +76,14 @@ where
     let authorization = build_authorization_header(&credential.access_key, creq, sts, &signature);
     let x_azn_date = date.fmt_aws();
 
-    let headers = req.headers_mut();
-    headers.insert(header::AUTHORIZATION, authorization.parse()?);
-    headers.insert(X_AMZ_DATE, x_azn_date.parse()?);
-    if let Some(token) = &credential.security_token {
-        headers.insert(X_AMZ_SECURITY_TOKEN, token.parse()?);
-    }
+    let mut ret = vec![];
 
-    Ok(())
+    ret.push((SignatureKey::Authorization, authorization));
+    ret.push((SignatureKey::AmzDate, x_azn_date));
+    if let Some(token) = &credential.security_token {
+        ret.push((SignatureKey::AmzSecurityToken, token.to_string()));
+    }
+    ret
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default, Clone)]
@@ -192,11 +226,11 @@ mod tests {
                 &[
                     httparse::Header {
                         name: "Host",
-                        value: b"example.amazonaws.com"
+                        value: b"example.amazonaws.com",
                     },
                     httparse::Header {
                         name: "X-Amz-Date",
-                        value: b"20150830T123600Z"
+                        value: b"20150830T123600Z",
                     }
                 ][..]
             )))

@@ -24,7 +24,7 @@ pub(crate) struct CanonicalRequest {
 }
 
 impl CanonicalRequest {
-    pub(crate) fn from<B>(req: &mut Request<B>) -> Result<CanonicalRequest, Error>
+    pub(crate) fn from<B>(req: &Request<B>) -> Result<CanonicalRequest, Error>
     where
         B: AsRef<[u8]>,
     {
