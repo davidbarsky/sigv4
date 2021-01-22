@@ -24,9 +24,10 @@ pub(crate) struct CanonicalRequest {
 }
 
 impl CanonicalRequest {
-    pub(crate) fn from<B>(
-        req: &Request<B>,
-    )  -> Result<CanonicalRequest, Error> where B: AsRef<[u8]> {
+    pub(crate) fn from<B>(req: &Request<B>) -> Result<CanonicalRequest, Error>
+    where
+        B: AsRef<[u8]>,
+    {
         let mut creq = CanonicalRequest {
             method: req.method().clone(),
             path: req.uri().path().to_string(),
