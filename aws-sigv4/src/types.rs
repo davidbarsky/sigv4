@@ -46,8 +46,8 @@ impl CanonicalRequest {
         creq.signed_headers = SignedHeaders { inner: headers };
         creq.headers = req.headers().clone();
         let body: &[u8] = req.body().as_ref();
-        let payload_hash = encode_bytes_with_hex(body);
-        creq.payload_hash = payload_hash;
+        let payload = encode_bytes_with_hex(body);
+        creq.payload_hash = payload;
         Ok(creq)
     }
 }
