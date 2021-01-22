@@ -36,7 +36,7 @@ where
     Ok(())
 }
 
-/// SignatureKey is the key half of the key-value pair of a generated signature
+/// SignatureKey is the key portion of the key-value pair of a generated SigV4 signature.
 ///
 /// When signing with SigV4, the algorithm produces multiple components of a signature that MUST
 /// be applied to a request.
