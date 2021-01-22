@@ -16,7 +16,7 @@ type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 use http::header::HeaderName;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 use types::{AsSigV4, CanonicalRequest, DateTimeExt, StringToSign};
 
 pub fn sign<B>(
@@ -28,9 +28,7 @@ pub fn sign<B>(
 where
     B: AsRef<[u8]>,
 {
-    for (header_name, header_value) in
-        sign_core(&req, req.body(), credential, region, svc, SystemTime::now())
-    {
+    for (header_name, header_value) in sign_core(&req, credential, region, svc, SystemTime::now()) {
         req.headers_mut()
             .append(header_name.header_name(), header_value.parse()?);
     }
@@ -60,14 +58,16 @@ impl SignatureKey {
 
 pub fn sign_core<B>(
     req: &http::Request<B>,
-    payload: impl AsRef<[u8]>,
     credential: &Credentials,
     region: &str,
     svc: &str,
     date: SystemTime,
-) -> Vec<(SignatureKey, String)> {
+) -> Vec<(SignatureKey, String)>
+where
+    B: AsRef<[u8]>,
+{
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
-    let creq = CanonicalRequest::from_req_payload(req, payload).unwrap();
+    let creq = CanonicalRequest::from(req).unwrap();
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
     let encoded_creq = &encode_with_hex(creq.fmt());

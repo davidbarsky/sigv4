@@ -24,16 +24,9 @@ pub(crate) struct CanonicalRequest {
 }
 
 impl CanonicalRequest {
-    pub(crate) fn from<B>(req: &Request<B>) -> Result<CanonicalRequest, Error>
-    where
-        B: AsRef<[u8]>,
-    {
-        Self::from_req_payload(req, req.body())
-    }
-    pub(crate) fn from_req_payload<B>(
+    pub(crate) fn from<B>(
         req: &Request<B>,
-        payload: impl AsRef<[u8]>,
-    ) -> Result<CanonicalRequest, Error> {
+    )  -> Result<CanonicalRequest, Error> where B: AsRef<[u8]> {
         let mut creq = CanonicalRequest {
             method: req.method().clone(),
             path: req.uri().path().to_string(),
@@ -51,7 +44,7 @@ impl CanonicalRequest {
         }
         creq.signed_headers = SignedHeaders { inner: headers };
         creq.headers = req.headers().clone();
-        let body: &[u8] = payload.as_ref();
+        let body: &[u8] = req.body().as_ref();
         let payload_hash = encode_bytes_with_hex(body);
         creq.payload_hash = payload_hash;
         Ok(creq)
