@@ -6,17 +6,6 @@ use hyper::{Body, Client};
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-fn load_credentials() -> Result<Credentials, Error> {
-    let access = std::env::var("AWS_ACCESS_KEY_ID")?;
-    let secret = std::env::var("AWS_SECRET_ACCESS_KEY")?;
-
-    Ok(Credentials {
-        access_key: access,
-        secret_key: secret,
-        ..Default::default()
-    })
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let https = hyper_tls::HttpsConnector::new();
@@ -33,7 +22,13 @@ async fn main() -> Result<(), Error> {
     headers.insert(header::HOST, "ec2.amazonaws.com".parse()?);
 
     let mut req = builder.body(Bytes::new())?;
-    let credentials = load_credentials()?;
+    let access = std::env::var("AWS_ACCESS_KEY_ID")?;
+    let secret = std::env::var("AWS_SECRET_ACCESS_KEY")?;
+    let credentials = Credentials {
+        access_key: &access,
+        secret_key: &secret,
+        security_token: None,
+    };
 
     sign(&mut req, &credentials, "us-east-1", "ec2")?;
     let req = reconstruct(req);

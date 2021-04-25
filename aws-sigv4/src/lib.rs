@@ -117,21 +117,21 @@ where
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default, Clone)]
-pub struct Credentials {
+pub struct Credentials<'a> {
     #[serde(rename = "aws_access_key_id")]
-    pub access_key: String,
+    pub access_key: &'a str,
     #[serde(rename = "aws_secret_access_key")]
-    pub secret_key: String,
+    pub secret_key: &'a str,
     #[serde(rename = "aws_session_token")]
-    pub security_token: Option<String>,
+    pub security_token: Option<&'a str>,
 }
 
-impl Credentials {
-    pub fn new<T: ToString>(access_key: T, secret_key: T, security_token: Option<T>) -> Self {
+impl<'a> Credentials<'a> {
+    pub fn new(access_key: &'a str, secret_key: &'a str, security_token: Option<&'a str>) -> Self {
         Self {
-            access_key: access_key.to_string(),
-            secret_key: secret_key.to_string(),
-            security_token: security_token.map(|token| token.to_string()),
+            access_key,
+            secret_key,
+            security_token,
         }
     }
 }

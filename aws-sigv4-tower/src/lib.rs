@@ -1,7 +1,13 @@
-use aws_sigv4::{sign, Credentials};
+use aws_sigv4::{sign, Credentials as CoreCredentials};
 use std::task;
 use tower::{layer::Layer, Service};
 
+#[derive(Debug, PartialEq, Default, Clone)]
+pub struct Credentials {
+    pub access_key: String,
+    pub secret_key: String,
+    pub security_token: Option<String>,
+}
 pub struct Request<'a, B> {
     pub inner: http::Request<B>,
     pub region: &'a str,
@@ -49,7 +55,12 @@ where
         } = req;
 
         let mut req: http::Request<B> = inner;
-        sign(&mut req, &self.credentials, &region, &service).unwrap();
+        let creds = CoreCredentials {
+            access_key: &self.credentials.access_key,
+            secret_key: &self.credentials.secret_key,
+            security_token: self.credentials.security_token.as_deref(),
+        };
+        sign(&mut req, &creds, &region, &service).unwrap();
 
         let req = map_body(req);
 
