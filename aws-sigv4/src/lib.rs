@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use http::header;
 use serde::{Deserialize, Serialize};
-use std::str;
+use std::{iter, str};
 
 pub const HMAC_256: &str = "AWS4-HMAC-SHA256";
 pub const DATE_FORMAT: &str = "%Y%m%dT%H%M%SZ";
@@ -28,7 +28,15 @@ pub fn sign<B>(
 where
     B: AsRef<[u8]>,
 {
-    for (header_name, header_value) in sign_core(&req, credential, region, svc, SystemTime::now()) {
+    for (header_name, header_value) in sign_core(
+        &req,
+        &credential.access_key,
+        &credential.secret_key,
+        credential.security_token.as_deref(),
+        region,
+        svc,
+        SystemTime::now(),
+    ) {
         req.headers_mut()
             .append(header_name.header_name(), header_value.parse()?);
     }
@@ -58,11 +66,13 @@ impl SignatureKey {
 
 pub fn sign_core<B>(
     req: &http::Request<B>,
-    credential: &Credentials,
+    access_key: &str,
+    secret_key: &str,
+    security_token: Option<&str>,
     region: &str,
     svc: &str,
     date: SystemTime,
-) -> Vec<(SignatureKey, String)>
+) -> impl Iterator<Item = (SignatureKey, String)>
 where
     B: AsRef<[u8]>,
 {
@@ -75,21 +85,19 @@ where
     let sts = StringToSign::new(date, region, svc, encoded_creq);
 
     // Step 3: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-calculate-signature.html
-    let signing_key = generate_signing_key(&credential.secret_key, date.date(), region, svc);
+    let signing_key = generate_signing_key(secret_key, date.date(), region, svc);
     let signature = calculate_signature(signing_key, &sts.fmt().as_bytes());
 
     // Step 4: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-add-signature-to-request.html
-    let authorization = build_authorization_header(&credential.access_key, creq, sts, &signature);
+    let authorization = build_authorization_header(access_key, creq, sts, &signature);
     let x_azn_date = date.fmt_aws();
 
-    let mut ret = vec![];
-
-    ret.push((SignatureKey::Authorization, authorization));
-    ret.push((SignatureKey::AmzDate, x_azn_date));
-    if let Some(token) = &credential.security_token {
-        ret.push((SignatureKey::AmzSecurityToken, token.to_string()));
-    }
-    ret
+    let mut tok = security_token.map(|it| it.to_string());
+    iter::once((SignatureKey::Authorization, authorization))
+        .chain(iter::once((SignatureKey::AmzDate, x_azn_date)))
+        .chain(iter::from_fn(move || {
+            tok.take().map(|tok| (SignatureKey::AmzSecurityToken, tok))
+        }))
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default, Clone)]
