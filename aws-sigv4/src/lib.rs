@@ -30,12 +30,14 @@ where
 {
     for (header_name, header_value) in sign_core(
         &req,
-        &credential.access_key,
-        &credential.secret_key,
-        credential.security_token.as_deref(),
-        region,
-        svc,
-        SystemTime::now(),
+        Config {
+            access_key: &credential.access_key,
+            secret_key: &credential.secret_key,
+            security_token: credential.security_token.as_deref(),
+            region,
+            svc,
+            date: SystemTime::now(),
+        },
     ) {
         req.headers_mut()
             .append(header_name.header_name(), header_value.parse()?);
@@ -64,18 +66,32 @@ impl SignatureKey {
     }
 }
 
-pub fn sign_core<B>(
-    req: &http::Request<B>,
-    access_key: &str,
-    secret_key: &str,
-    security_token: Option<&str>,
-    region: &str,
-    svc: &str,
-    date: SystemTime,
+pub struct Config<'a> {
+    pub access_key: &'a str,
+    pub secret_key: &'a str,
+    pub security_token: Option<&'a str>,
+
+    pub region: &'a str,
+    pub svc: &'a str,
+
+    pub date: SystemTime,
+}
+
+pub fn sign_core<'a, B>(
+    req: &'a http::Request<B>,
+    config: Config<'a>,
 ) -> impl Iterator<Item = (SignatureKey, String)>
 where
     B: AsRef<[u8]>,
 {
+    let Config {
+        access_key,
+        secret_key,
+        security_token,
+        region,
+        svc,
+        date,
+    } = config;
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
     let creq = CanonicalRequest::from(req).unwrap();
 
