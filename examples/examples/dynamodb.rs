@@ -9,8 +9,8 @@ use serde_json::json;
 use std::convert::TryFrom;
 use tower::{builder::ServiceBuilder, Service};
 
-use aws_sigv4::{Credentials, X_AMZ_TARGET};
-use aws_sigv4_tower::{SignAndPrepare, SignAndPrepareLayer};
+use aws_sigv4::X_AMZ_TARGET;
+use aws_sigv4_tower::{Credentials, SignAndPrepare, SignAndPrepareLayer};
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
