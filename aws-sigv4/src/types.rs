@@ -141,8 +141,8 @@ impl<'a> TryFrom<&'a str> for Scope<'a> {
     fn try_from(s: &'a str) -> Result<Scope<'a>, Self::Error> {
         let mut scopes = s.split('/');
         let date = Date::<Utc>::parse_aws(scopes.next().expect("missing date"))?;
-        let region = scopes.next().expect("missing date");
-        let service = scopes.next().expect("missing date");
+        let region = scopes.next().expect("missing region");
+        let service = scopes.next().expect("missing service");
 
         let scope = Scope {
             date,
