@@ -37,6 +37,7 @@ where
             region,
             svc,
             date: SystemTime::now(),
+            settings: Default::default(),
         },
     ) {
         req.headers_mut()
@@ -75,6 +76,24 @@ pub struct Config<'a> {
     pub svc: &'a str,
 
     pub date: SystemTime,
+
+    pub settings: SigningSettings,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct SigningSettings {
+    /// We assume the uri will be encoded once in preparation for transmission.  Certain services
+    /// do not decode before checking signature, requiring us to actually double-encode the uri
+    /// in the canonical request in order to pass a signature check.
+    double_uri_encode: bool,
+}
+
+impl Default for SigningSettings {
+    fn default() -> Self {
+        Self {
+            double_uri_encode: true,
+        }
+    }
 }
 
 pub fn sign_core<'a, B>(
@@ -91,9 +110,10 @@ where
         region,
         svc,
         date,
+        settings,
     } = config;
     // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
-    let creq = CanonicalRequest::from(req).unwrap();
+    let creq = CanonicalRequest::from(req, &settings).unwrap();
 
     // Step 2: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-string-to-sign.html.
     let encoded_creq = &encode_with_hex(creq.fmt());
@@ -142,7 +162,7 @@ mod tests {
         assert_req_eq, build_authorization_header, read,
         sign::{calculate_signature, encode_with_hex, generate_signing_key},
         types::{AsSigV4, CanonicalRequest, DateExt, DateTimeExt, Scope, StringToSign},
-        Error, DATE_FORMAT,
+        Error, SigningSettings, DATE_FORMAT,
     };
     use chrono::{Date, DateTime, NaiveDateTime, Utc};
     use http::{Method, Request, Uri, Version};
@@ -160,7 +180,7 @@ mod tests {
         // Step 1: https://docs.aws.amazon.com/en_pv/general/latest/gr/sigv4-create-canonical-request.html.
         let s = read!(req: "get-vanilla-query-order-key-case")?;
         let mut req = parse_request(s.as_bytes())?;
-        let creq = CanonicalRequest::from(&mut req)?;
+        let creq = CanonicalRequest::from(&mut req, &SigningSettings::default())?;
 
         let actual = format!("{}", creq);
         let expected = read!(creq: "get-vanilla-query-order-key-case")?;
@@ -200,7 +220,7 @@ mod tests {
     fn test_build_authorization_header() -> Result<(), Error> {
         let s = read!(req: "get-vanilla-query-order-key-case")?;
         let mut req = parse_request(s.as_bytes())?;
-        let creq = CanonicalRequest::from(&mut req)?;
+        let creq = CanonicalRequest::from(&mut req, &SigningSettings::default())?;
 
         let date = NaiveDateTime::parse_from_str("20150830T123600Z", DATE_FORMAT).unwrap();
         let date = DateTime::<Utc>::from_utc(date, Utc);
@@ -341,6 +361,25 @@ mod tests {
         let expected = "816cd5b414d056048ba4f7c5386d6e0533120fb1fcfa93762cf0fc39e2cf19e0";
 
         assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_double_url_encode() -> Result<(), Error> {
+        let s = read!(req: "double-url-encode")?;
+        let req = parse_request(s.as_bytes())?;
+        println!("{:?}", req);
+        let creq = CanonicalRequest::from(&req, &SigningSettings::default())?;
+
+        let actual = format!("{}", creq);
+        let expected = read!(creq: "double-url-encode")?;
+        println!("{}", actual);
+        assert_eq!(actual, expected);
+        /*let req = read!(req: "double-url-encode")?;
+        let req = parse_request(req.as_bytes())?;
+        let expected_creq = read!(creq: "double-url-encode")?;
+        let actual_creq = CanonicalRequest::from(&req);
+        let expected_creq =*/
         Ok(())
     }
 

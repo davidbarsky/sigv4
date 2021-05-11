@@ -1,4 +1,4 @@
-use crate::{sign::encode_bytes_with_hex, Error, DATE_FORMAT, HMAC_256};
+use crate::{sign::encode_bytes_with_hex, Error, SigningSettings, DATE_FORMAT, HMAC_256};
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use http::{header::HeaderName, HeaderMap, Method, Request};
 use serde_urlencoded as qs;
@@ -24,13 +24,21 @@ pub(crate) struct CanonicalRequest {
 }
 
 impl CanonicalRequest {
-    pub(crate) fn from<B>(req: &Request<B>) -> Result<CanonicalRequest, Error>
-    where
-        B: AsRef<[u8]>,
+    pub(crate) fn from<B>(
+        req: &Request<B>,
+        settings: &SigningSettings,
+    ) -> Result<CanonicalRequest, Error>
+        where
+            B: AsRef<[u8]>,
     {
+        let path = if settings.double_uri_encode {
+            double_encode(req.uri().path())
+        } else {
+            req.uri().path().to_string()
+        };
         let mut creq = CanonicalRequest {
             method: req.method().clone(),
-            path: req.uri().path().to_string(),
+            path,
             ..Default::default()
         };
 
@@ -50,6 +58,35 @@ impl CanonicalRequest {
         creq.payload_hash = payload;
         Ok(creq)
     }
+}
+
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+
+const PATH: &AsciiSet = &CONTROLS
+    .add(b':')
+    .add(b'?')
+    .add(b'#')
+    .add(b'[')
+    .add(b')')
+    .add(b')')
+    .add(b'@')
+    .add(b'!')
+    .add(b'$')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b';')
+    .add(b'=')
+    .add(b'%');
+
+//:/?#[]@!$&'()*+,;=
+
+fn double_encode(path: &str) -> String {
+    utf8_percent_encode(path, PATH).to_string()
 }
 
 impl AsSigV4 for CanonicalRequest {
