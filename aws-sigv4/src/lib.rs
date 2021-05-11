@@ -82,9 +82,9 @@ pub struct Config<'a> {
 
 #[derive(Debug, PartialEq)]
 pub struct SigningSettings {
-    /// We assume the uri will be encoded once in preparation for transmission.  Certain services
-    /// do not decode before checking signature, requiring us to actually double-encode the uri
-    /// in the canonical request in order to pass a signature check.
+    /// We assume the URI will be encoded _once_ prior to transmission. Some services
+    /// do not decode the path prior to checking the signature, requiring clients to actually _double-encode_
+    /// the URI in creating the canonical request in order to pass a signature check.
     double_uri_encode: bool,
 }
 
