@@ -1,6 +1,9 @@
-use crate::{sign::encode_bytes_with_hex, Error, SigningSettings, DATE_FORMAT, HMAC_256};
+use crate::{
+    sign::encode_bytes_with_hex, Error, SigningSettings, UriEncoding, DATE_FORMAT, HMAC_256,
+};
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use http::{header::HeaderName, HeaderMap, Method, Request};
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde_urlencoded as qs;
 use std::{
     cmp::Ordering,
@@ -28,13 +31,13 @@ impl CanonicalRequest {
         req: &Request<B>,
         settings: &SigningSettings,
     ) -> Result<CanonicalRequest, Error>
-        where
-            B: AsRef<[u8]>,
+    where
+        B: AsRef<[u8]>,
     {
-        let path = if settings.double_uri_encode {
-            double_encode(req.uri().path())
-        } else {
-            req.uri().path().to_string()
+        let path = req.uri().path();
+        let path = match settings.uri_encoding {
+            UriEncoding::Double => utf8_percent_encode(path, PATH_ENCODED_CHARACTERS).to_string(),
+            UrIEncoding::Single => path.to_string(),
         };
         let mut creq = CanonicalRequest {
             method: req.method().clone(),
@@ -60,9 +63,9 @@ impl CanonicalRequest {
     }
 }
 
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
-
-const PATH: &AsciiSet = &CONTROLS
+// Configure the set of ASCII characters that need to be URL encoded
+const PATH_ENCODED_CHARACTERS: &AsciiSet = &CONTROLS
+    .add(b' ')
     .add(b':')
     .add(b'?')
     .add(b'#')
@@ -82,12 +85,6 @@ const PATH: &AsciiSet = &CONTROLS
     .add(b';')
     .add(b'=')
     .add(b'%');
-
-//:/?#[]@!$&'()*+,;=
-
-fn double_encode(path: &str) -> String {
-    utf8_percent_encode(path, PATH).to_string()
-}
 
 impl AsSigV4 for CanonicalRequest {
     fn fmt(&self) -> String {

@@ -14,6 +14,7 @@ pub mod types;
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+use crate::UriEncoding::Double;
 use http::header::HeaderName;
 use sign::{calculate_signature, encode_with_hex, generate_signing_key};
 use std::time::SystemTime;
@@ -83,15 +84,25 @@ pub struct Config<'a> {
 #[derive(Debug, PartialEq)]
 pub struct SigningSettings {
     /// We assume the URI will be encoded _once_ prior to transmission. Some services
-    /// do not decode the path prior to checking the signature, requiring clients to actually _double-encode_
-    /// the URI in creating the canonical request in order to pass a signature check.
-    double_uri_encode: bool,
+    /// do not decode the path prior to checking the signature, requiring clients to actually
+    /// _double-encode_ the URI in creating the canonical request in order to pass a signature check.
+    pub uri_encoding: UriEncoding,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Eq, PartialEq)]
+pub enum UriEncoding {
+    /// Re-encode the resulting URL (eg. %30 becomes `%2530)
+    Double,
+
+    /// Take the resulting URL as-is
+    Single,
 }
 
 impl Default for SigningSettings {
     fn default() -> Self {
         Self {
-            double_uri_encode: true,
+            uri_encoding: Double,
         }
     }
 }
