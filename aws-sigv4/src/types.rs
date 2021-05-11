@@ -3,7 +3,6 @@ use crate::{
 };
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use http::{header::HeaderName, HeaderMap, Method, Request};
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde_urlencoded as qs;
 use std::{
     cmp::Ordering,
@@ -36,8 +35,9 @@ impl CanonicalRequest {
     {
         let path = req.uri().path();
         let path = match settings.uri_encoding {
-            UriEncoding::Double => utf8_percent_encode(path, PATH_ENCODED_CHARACTERS).to_string(),
-            UrIEncoding::Single => path.to_string(),
+            // The string is already URI encoded, we don't need to encode everything again, just `%`
+            UriEncoding::Double => path.replace('%', "%25"),
+            UriEncoding::Single => path.to_string(),
         };
         let mut creq = CanonicalRequest {
             method: req.method().clone(),
@@ -65,25 +65,6 @@ impl CanonicalRequest {
 
 // Configure the set of ASCII characters that need to be URL encoded
 const PATH_ENCODED_CHARACTERS: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b':')
-    .add(b'?')
-    .add(b'#')
-    .add(b'[')
-    .add(b')')
-    .add(b')')
-    .add(b'@')
-    .add(b'!')
-    .add(b'$')
-    .add(b'&')
-    .add(b'\'')
-    .add(b'(')
-    .add(b')')
-    .add(b'*')
-    .add(b'+')
-    .add(b',')
-    .add(b';')
-    .add(b'=')
     .add(b'%');
 
 impl AsSigV4 for CanonicalRequest {
