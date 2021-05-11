@@ -63,10 +63,6 @@ impl CanonicalRequest {
     }
 }
 
-// Configure the set of ASCII characters that need to be URL encoded
-const PATH_ENCODED_CHARACTERS: &AsciiSet = &CONTROLS
-    .add(b'%');
-
 impl AsSigV4 for CanonicalRequest {
     fn fmt(&self) -> String {
         self.to_string()
