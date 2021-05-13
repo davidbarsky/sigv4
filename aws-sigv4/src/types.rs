@@ -1,4 +1,6 @@
-use crate::{sign::encode_bytes_with_hex, Error, DATE_FORMAT, HMAC_256};
+use crate::{
+    sign::encode_bytes_with_hex, Error, SigningSettings, UriEncoding, DATE_FORMAT, HMAC_256,
+};
 use chrono::{format::ParseError, Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 use http::{header::HeaderName, HeaderMap, Method, Request};
 use serde_urlencoded as qs;
@@ -24,13 +26,22 @@ pub(crate) struct CanonicalRequest {
 }
 
 impl CanonicalRequest {
-    pub(crate) fn from<B>(req: &Request<B>) -> Result<CanonicalRequest, Error>
+    pub(crate) fn from<B>(
+        req: &Request<B>,
+        settings: &SigningSettings,
+    ) -> Result<CanonicalRequest, Error>
     where
         B: AsRef<[u8]>,
     {
+        let path = req.uri().path();
+        let path = match settings.uri_encoding {
+            // The string is already URI encoded, we don't need to encode everything again, just `%`
+            UriEncoding::Double => path.replace('%', "%25"),
+            UriEncoding::Single => path.to_string(),
+        };
         let mut creq = CanonicalRequest {
             method: req.method().clone(),
-            path: req.uri().path().to_string(),
+            path,
             ..Default::default()
         };
 
